@@ -1,6 +1,12 @@
 name: release
 
 # Publish multi-arch images to ghcr.io on a version tag (e.g. v0.151.0).
+#
+# Each arch is built on its OWN native runner (amd64 -> ubuntu-24.04,
+# arm64 -> ubuntu-24.04-arm) instead of emulating arm64 under QEMU. The
+# ebpf flavour runs a full OTel Collector + OBI compile, which is hours-slow
+# under emulation but minutes on native hardware. Per-arch images are pushed
+# by digest, then a merge job stitches them into one multi-arch manifest.
 on:
   push:
     tags:
@@ -16,20 +22,38 @@ permissions:
   packages: write
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavour: default
+            target: default
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - flavour: default
+            target: default
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - flavour: ebpf
+            target: ebpf
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - flavour: ebpf
+            target: ebpf
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Derive version
-        id: version
-        # Strip the leading `v` from the tag: v0.151.0 -> 0.151.0
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      # arm64 is built under QEMU emulation (runners are amd64).
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Prepare platform pair
+        id: prep
+        # linux/amd64 -> linux-amd64 (for a valid artifact name)
+        run: echo "pair=${platform//\//-}" >> "$GITHUB_OUTPUT"
+        env:
+          platform: ${{ matrix.platform }}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -41,29 +65,77 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # default flavour -> :<version> + :latest
-      - name: Build and push (default)
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: default
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
-            ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.flavour }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.flavour }}-${{ matrix.platform }}
 
-      # eBPF flavour -> :<version>-ebpf
-      - name: Build and push (ebpf)
-        uses: docker/build-push-action@v6
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
         with:
-          context: .
-          target: ebpf
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}-ebpf
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          name: digests-${{ matrix.flavour }}-${{ steps.prep.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-24.04
+    needs: build
+    strategy:
+      matrix:
+        flavour: [default, ebpf]
+    steps:
+      - name: Derive version
+        id: version
+        # Strip the leading `v` from the tag: v0.151.0 -> 0.151.0
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.flavour }}-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        # default flavour -> :<version> + :latest ; ebpf flavour -> :<version>-ebpf
+        run: |
+          if [ "${{ matrix.flavour }}" = "default" ]; then
+            echo "args=-t ${IMAGE}:${{ steps.version.outputs.version }} -t ${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+            echo "ref=${IMAGE}:${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=-t ${IMAGE}:${{ steps.version.outputs.version }}-ebpf" >> "$GITHUB_OUTPUT"
+            echo "ref=${IMAGE}:${{ steps.version.outputs.version }}-ebpf" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create ${{ steps.tags.outputs.args }} \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Inspect
+        run: docker buildx imagetools inspect ${{ steps.tags.outputs.ref }}
