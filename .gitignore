@@ -1,0 +1,11 @@
+# Local supervisor state
+/tmp/
+supervisor/
+
+# Local supervisor configs — these carry a real enrollment token, keep them out
+supervisor.yaml
+*.supervisor.yaml
+
+# OS / editor cruft
+.DS_Store
+*.swp

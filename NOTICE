@@ -1,0 +1,29 @@
+xscaler-agent
+Copyright 2026 xscaler
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This distribution builds on the following third-party components, each of which
+is itself licensed under the Apache License, Version 2.0. Their source and
+license/NOTICE files are available at the linked repositories:
+
+- OpenTelemetry Collector (core)
+  https://github.com/open-telemetry/opentelemetry-collector
+  Copyright The OpenTelemetry Authors
+
+- OpenTelemetry Collector Contrib
+  https://github.com/open-telemetry/opentelemetry-collector-contrib
+  Copyright The OpenTelemetry Authors
+
+- OpenTelemetry Collector Releases (opampsupervisor base image)
+  https://github.com/open-telemetry/opentelemetry-collector-releases
+  Copyright The OpenTelemetry Authors
+
+- OpenTelemetry eBPF Instrumentation (OBI)
+  https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation
+  Copyright The OpenTelemetry Authors
+  (Donated from Grafana Beyla.)
+
+The container images produced from this repository embed prebuilt binaries of
+the above components. Their respective LICENSE and NOTICE files ship inside
+those upstream binaries/images and are retained there.

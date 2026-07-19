@@ -1,0 +1,5 @@
+# The build only needs the Dockerfile and builder.yaml. Keep everything else
+# out of the build context so the eBPF build (which is already heavy) stays lean.
+*
+!Dockerfile
+!builder.yaml
