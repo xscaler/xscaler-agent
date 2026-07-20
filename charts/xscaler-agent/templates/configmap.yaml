@@ -1,0 +1,23 @@
+{{- if .Values.nodeAgent.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "xscaler-agent.fullname" . }}-{{ .Values.nodeAgent.name }}
+  labels:
+    {{- include "xscaler-agent.labels" . | nindent 4 }}
+data:
+  supervisor.yaml: |
+    {{- include "xscaler-agent.supervisorConfig" (dict "ctx" . "role" .Values.nodeAgent.name) | nindent 4 }}
+{{- end }}
+{{- if .Values.clusterAgent.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "xscaler-agent.fullname" . }}-{{ .Values.clusterAgent.name }}
+  labels:
+    {{- include "xscaler-agent.labels" . | nindent 4 }}
+data:
+  supervisor.yaml: |
+    {{- include "xscaler-agent.supervisorConfig" (dict "ctx" . "role" .Values.clusterAgent.name) | nindent 4 }}
+{{- end }}

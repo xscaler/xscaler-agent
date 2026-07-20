@@ -1,0 +1,113 @@
+{{- if .Values.nodeAgent.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "xscaler-agent.fullname" . }}-{{ .Values.nodeAgent.name }}
+  labels:
+    {{- include "xscaler-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.nodeAgent.name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: {{ .Values.nodeAgent.name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "xscaler-agent.supervisorConfig" (dict "ctx" . "role" .Values.nodeAgent.name) | sha256sum }}
+      labels:
+        {{- include "xscaler-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ .Values.nodeAgent.name }}
+    spec:
+      serviceAccountName: {{ include "xscaler-agent.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeAgent.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- if .Values.nodeAgent.ebpf.enabled }}
+      hostPID: true
+      {{- if .Values.nodeAgent.ebpf.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- end }}
+      tolerations:
+        {{- toYaml .Values.nodeAgent.tolerations | nindent 8 }}
+      containers:
+        - name: supervisor
+          image: {{ include "xscaler-agent.nodeImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/etc/supervisor/supervisor.yaml"]
+          {{- if .Values.nodeAgent.ebpf.enabled }}
+          securityContext:
+            # OBI's eBPF loader needs effective capabilities, which a non-root
+            # process never gets even in a privileged pod. The opampsupervisor
+            # image defaults to UID 10001, so run as root for the eBPF path.
+            runAsUser: 0
+            runAsGroup: 0
+            {{- if .Values.nodeAgent.ebpf.privileged }}
+            privileged: true
+            {{- else }}
+            capabilities:
+              add: [BPF, PERFMON, SYS_ADMIN, SYS_PTRACE, NET_RAW, DAC_READ_SEARCH, CHECKPOINT_RESTORE]
+            {{- end }}
+          {{- end }}
+          {{- $traces := .Values.nodeAgent.traces | default dict }}
+          {{- if and $traces.enabled (eq ($traces.expose | default "service") "hostPort") }}
+          ports:
+            - { name: otlp-grpc, containerPort: {{ $traces.grpcPort | default 4317 }}, hostPort: {{ $traces.grpcPort | default 4317 }} }
+            - { name: otlp-http, containerPort: {{ $traces.httpPort | default 4318 }}, hostPort: {{ $traces.httpPort | default 4318 }} }
+          {{- end }}
+          env:
+            - name: XSCALER_ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "xscaler-agent.secretName" . }}
+                  key: {{ .Values.existingSecret.key }}
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- if .Values.nodeAgent.ebpf.enabled }}
+            # OBI Kubernetes metadata: enables PID->pod->namespace correlation so
+            # `discovery.instrument: [{k8s_namespace: ...}]` selectors match, and
+            # decorates spans with k8s attributes.
+            - name: OTEL_EBPF_KUBE_METADATA_ENABLE
+              value: "true"
+            - name: OTEL_EBPF_KUBE_CLUSTER_NAME
+              value: {{ .Values.nodeAgent.ebpf.clusterName | default "kubernetes" | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.nodeAgent.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/supervisor }
+            - { name: storage, mountPath: {{ .Values.storageDir | quote }} }
+            - { name: varlog, mountPath: {{ .Values.nodeAgent.hostPaths.varLog | quote }}, readOnly: true }
+            {{- if .Values.nodeAgent.ebpf.enabled }}
+            - { name: sys, mountPath: /sys, readOnly: true }
+            - { name: hostproc, mountPath: /host/proc, readOnly: true }
+            # Writable bpffs so OBI can pin eBPF maps (enables distributed
+            # trace-context propagation across processes). /sys above is
+            # read-only, so bpffs needs its own read-write mount.
+            - { name: bpffs, mountPath: /sys/fs/bpf, mountPropagation: HostToContainer }
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "xscaler-agent.fullname" . }}-{{ .Values.nodeAgent.name }}
+        - name: storage
+          emptyDir: {}
+        - name: varlog
+          hostPath: { path: {{ .Values.nodeAgent.hostPaths.varLog | quote }} }
+        {{- if .Values.nodeAgent.ebpf.enabled }}
+        - name: sys
+          hostPath: { path: /sys }
+        - name: hostproc
+          hostPath: { path: /proc }
+        - name: bpffs
+          hostPath: { path: /sys/fs/bpf, type: Directory }
+        {{- end }}
+{{- end }}

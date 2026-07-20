@@ -1,0 +1,18 @@
+{{- $traces := .Values.nodeAgent.traces | default dict }}
+{{- if and .Values.nodeAgent.enabled $traces.enabled (eq ($traces.expose | default "service") "service") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "xscaler-agent.fullname" . }}-{{ .Values.nodeAgent.name }}-traces
+  labels:
+    {{- include "xscaler-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.nodeAgent.name }}
+spec:
+  internalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: {{ .Values.nodeAgent.name }}
+  ports:
+    - { name: otlp-grpc, port: {{ $traces.grpcPort | default 4317 }}, targetPort: {{ $traces.grpcPort | default 4317 }}, protocol: TCP }
+    - { name: otlp-http, port: {{ $traces.httpPort | default 4318 }}, targetPort: {{ $traces.httpPort | default 4318 }}, protocol: TCP }
+{{- end }}

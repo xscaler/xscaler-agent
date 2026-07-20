@@ -1,0 +1,104 @@
+# Default values for xscaler-agent.
+image:
+  repository: ghcr.io/xscaler/xscaler-agent
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Pull secrets for the image. The GHCR package is private on first publish, so
+# unless it's made public, reference a docker-registry Secret here, e.g.:
+#   imagePullSecrets:
+#     - name: ghcr-xscaler
+imagePullSecrets: []
+
+opampEndpoint: "wss://agents.xscalerlabs.com/v1/opamp"
+
+# Enrollment token (xse_...). Provide the plaintext here for the chart to
+# create a Secret, OR set enrollmentToken="" and point existingSecret at a
+# Secret you manage. Never commit a real token to values.yaml.
+enrollmentToken: ""
+# Reference an out-of-band Secret instead of templating the token.
+existingSecret:
+  name: ""            # Secret name; empty => chart creates one from enrollmentToken
+  key: "token"        # key within the Secret holding the bearer token
+
+# -- Labels reported to agent-api as non_identifying_attributes. The config-
+# match engine (label selectors on assignments) targets agents by these.
+# `role` is added per-workload (node|cluster); do not set it here.
+labels:
+  platform: kubernetes
+  environment: dev
+
+# Supervisor storage dir (inside the container; ephemeral emptyDir).
+storageDir: /var/lib/opampsupervisor
+
+# ---- Node agent (DaemonSet): host metrics, container logs, kubelet stats ----
+nodeAgent:
+  enabled: true
+  name: node
+  # Host paths mounted so a pushed filelog/hostmetrics config can read them.
+  # /var/log covers container logs on containerd nodes too — pod logs live under
+  # /var/log/pods (with /var/log/containers symlinks), so no docker-specific
+  # mount is needed.
+  hostPaths:
+    varLog: /var/log
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  tolerations:
+    - operator: Exists   # run on every node incl. control-plane/tainted
+  # Keep the node agent from being evicted under node pressure — a telemetry
+  # DaemonSet should outlive the workloads it observes. Set e.g.
+  # system-node-critical (a built-in PriorityClass) in production.
+  priorityClassName: ""
+  # ---- eBPF (OBI) zero-code network + application instrumentation ------------
+  # Requires a custom agent image built with the OBI collector receiver (not in
+  # stock otelcol-contrib), and grants the DaemonSet elevated kernel privileges
+  # for eBPF. Off by default. The `obi` receiver/pipelines still arrive as a
+  # pushed OpAMP config — this only opens the host-level access it needs.
+  ebpf:
+    enabled: false
+    # privileged: true is the simplest grant; set false to use the scoped
+    # capability set (BPF, PERFMON, SYS_ADMIN, SYS_PTRACE, NET_RAW,
+    # DAC_READ_SEARCH, CHECKPOINT_RESTORE) instead.
+    privileged: true
+    # hostNetwork is only needed for OBI's network-flow feature; it moves the
+    # OTLP receiver onto the host netns (port-collision risk). Leave off unless
+    # the pushed obi config enables `features: [network]`.
+    hostNetwork: false
+    # Cluster name reported to OBI (OTEL_EBPF_KUBE_CLUSTER_NAME). Needed for
+    # PID->pod->namespace correlation so `discovery.instrument: [{k8s_namespace}]`
+    # selectors match; also stamps k8s.cluster.name on spans/metrics.
+    clusterName: "kubernetes"
+  # ---- Traces intake (OTLP receiver reachability) ----------------------------
+  # The traces `otlp` receiver + pipeline itself is a pushed OpAMP config, not
+  # part of this chart. This only opens the network path so pods can reach the
+  # node-local receiver. Off by default: with no receiver pushed, an exposed
+  # port would refuse connections.
+  traces:
+    enabled: false
+    grpcPort: 4317
+    httpPort: 4318
+    # How pods reach the receiver:
+    #   service  - ClusterIP with internalTrafficPolicy: Local (node-local, and
+    #              gives the OTel Operator's Instrumentation CR a stable DNS name)
+    #   hostPort - bind the ports on the node; pods send to status.hostIP
+    expose: service
+
+# ---- Cluster agent (Deployment): k8s cluster metrics + events (singleton) ----
+clusterAgent:
+  enabled: true
+  name: cluster
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  priorityClassName: ""
+
+# RBAC needed by the usual k8s receivers (kubeletstats, k8s_cluster,
+# k8sobjects/events). Created cluster-wide; disable to bring your own.
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""   # defaults to the release fullname

@@ -1,0 +1,57 @@
+{{- if .Values.clusterAgent.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "xscaler-agent.fullname" . }}-{{ .Values.clusterAgent.name }}
+  labels:
+    {{- include "xscaler-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.clusterAgent.name }}
+spec:
+  replicas: {{ .Values.clusterAgent.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: {{ .Values.clusterAgent.name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "xscaler-agent.supervisorConfig" (dict "ctx" . "role" .Values.clusterAgent.name) | sha256sum }}
+      labels:
+        {{- include "xscaler-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ .Values.clusterAgent.name }}
+    spec:
+      serviceAccountName: {{ include "xscaler-agent.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clusterAgent.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      containers:
+        - name: supervisor
+          image: {{ include "xscaler-agent.clusterImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/etc/supervisor/supervisor.yaml"]
+          env:
+            - name: XSCALER_ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "xscaler-agent.secretName" . }}
+                  key: {{ .Values.existingSecret.key }}
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            {{- toYaml .Values.clusterAgent.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/supervisor }
+            - { name: storage, mountPath: {{ .Values.storageDir | quote }} }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "xscaler-agent.fullname" . }}-{{ .Values.clusterAgent.name }}
+        - name: storage
+          emptyDir: {}
+{{- end }}

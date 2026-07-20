@@ -1,0 +1,23 @@
+apiVersion: v2
+name: xscaler-agent
+description: >-
+  OpAMP-managed OpenTelemetry agents for Kubernetes. Runs the xScaler
+  opampsupervisor (wrapping otelcol-contrib) as a per-node DaemonSet and a
+  single cluster-scoped Deployment, both enrolling into agent-api which pushes
+  their collector config remotely.
+type: application
+version: 0.1.0
+# xscaler's own distro version — the tag the agent image is published under.
+# The bundled OpenTelemetry collector version is an internal build detail
+# (Dockerfile OTEL_VERSION, surfaced as the image's
+# org.opentelemetry.collector.version label), not this number.
+appVersion: "0.1.0"
+keywords:
+  - opentelemetry
+  - opamp
+  - xscaler
+  - monitoring
+sources:
+  - https://github.com/open-telemetry/opentelemetry-collector-contrib
+maintainers:
+  - name: xScaler
