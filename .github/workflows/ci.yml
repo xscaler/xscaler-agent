@@ -3,7 +3,7 @@ on:
   pull_request:
     paths:
       - "charts/xscaler-agent/**"
-      - ".github/workflows/ci.yml"
+      - ".github/workflows/**"
 
 permissions:
   contents: read
@@ -32,3 +32,15 @@ jobs:
             --set enrollmentToken=xse_ci \
             --set nodeAgent.ebpf.enabled=true \
             --set nodeAgent.traces.enabled=true >/dev/null
+
+  actions:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint workflows
+        # actionlint validates workflow syntax + ${{ }} expressions and runs
+        # shellcheck over `run:` scripts. Catches release.yml bugs before they
+        # reach main (the release path). Pin the image tag to bump on purpose.
+        run: docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.12 -color

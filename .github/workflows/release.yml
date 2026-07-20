@@ -1,10 +1,12 @@
 name: release
 on:
+  # Runs on every push to main, but the `version` job only cuts a release when
+  # Chart.yaml's version names a tag that doesn't exist yet — otherwise it
+  # no-ops. (A paths filter on Chart.yaml can't be used here: it would never
+  # fire on the commit that first introduces this workflow, since that commit
+  # doesn't touch Chart.yaml.)
   push:
     branches: [main]
-    # A release is cut whenever the distro version in Chart.yaml changes.
-    paths:
-      - "charts/xscaler-agent/Chart.yaml"
   workflow_dispatch: {}
 
 env:
@@ -158,6 +160,8 @@ jobs:
       - name: Create manifest list and push
         working-directory: /tmp/digests
         run: |
+          # Word-splitting is intentional: each digest becomes a separate arg.
+          # shellcheck disable=SC2046
           docker buildx imagetools create ${{ steps.tags.outputs.args }} \
             $(printf "${IMAGE}@sha256:%s " *)
 
