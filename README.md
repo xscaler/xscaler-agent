@@ -56,9 +56,12 @@ ghcr.io/xscaler/xscaler-agent:<version>-ebpf     # eBPF flavour
 ghcr.io/xscaler/xscaler-agent:latest             # latest default
 ```
 
-`<version>` matches the `OTEL_VERSION` pin (e.g. `0.151.0`) or the release tag.
-The xscaler `k8s-collector` Helm chart points `image.repository` at
-`ghcr.io/xscaler/xscaler-agent`; the per-node DaemonSet uses the `-ebpf` tag.
+`<version>` is the **xScaler distro version** (e.g. `0.1.0`) — the release
+number, independent of the bundled collector's `OTEL_VERSION` (`0.151.0`, an
+internal build detail surfaced only as the `org.opentelemetry.collector.version`
+image label). The `xscaler-agent` Helm chart points `image.repository` at
+`ghcr.io/xscaler/xscaler-agent` and defaults the tag to its `appVersion`; the
+per-node DaemonSet uses the `-ebpf` tag.
 
 ## Run
 
@@ -140,7 +143,7 @@ The `ebpf` image adds the
 [OBI](https://opentelemetry.io/docs/zero-code/obi/configure/collector-receiver/)
 eBPF receiver (donated from Grafana Beyla) for zero-code auto-instrumentation.
 OBI instruments processes on its **own node** and emits both traces and metrics,
-so it's intended for a per-node DaemonSet (the xscaler `k8s-collector` node
+so it's intended for a per-node DaemonSet (the xscaler `xscaler-agent` node
 agent).
 
 ### Why the build is heavy
@@ -177,8 +180,23 @@ docker run --rm --entrypoint /usr/local/bin/otelcol-contrib \
 
 ## Releasing
 
-Pushing a git tag (e.g. `v0.151.0`) triggers
-[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
-both targets for `linux/amd64` + `linux/arm64` and pushes them to
-`ghcr.io/xscaler/xscaler-agent`. The first publish creates the package as
-private — set it public once in the GitHub package settings.
+Releases are driven by the **distro version** — the `version` field in
+[`charts/xscaler-agent/Chart.yaml`](charts/xscaler-agent/Chart.yaml). This is
+xScaler's own release number and is **not** the bundled collector's
+`OTEL_VERSION` (see [Version pins](#version-pins)).
+
+To cut a release, bump `version` in `Chart.yaml` in a PR and merge to `main`.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) then:
+
+1. tags `v<version>` if that tag doesn't exist yet (nothing happens if the
+   version is unchanged);
+2. builds both targets for `linux/amd64` + `linux/arm64` and pushes them to
+   `ghcr.io/xscaler/xscaler-agent` as `:<version>`, `:<version>-ebpf`, and
+   `:latest`;
+3. packages the Helm chart with `version` and `appVersion` set to `<version>`
+   and pushes it to `oci://ghcr.io/xscaler/charts`.
+
+So one number in `Chart.yaml` drives the git tag, both image tags, and the chart
+version/appVersion in lockstep. The first publish of each package (images and
+chart) creates it as private — set it public once in the GitHub package
+settings.
