@@ -6,7 +6,7 @@ on:
   # fire on the commit that first introduces this workflow, since that commit
   # doesn't touch Chart.yaml.)
   push:
-    branches: [main, fix/release-workflow] # TODO: TEMPORARY branch test — revert to [main] before merge
+    branches: [main]
   workflow_dispatch: {}
 
 env:
