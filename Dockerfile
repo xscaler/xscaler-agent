@@ -34,8 +34,16 @@ FROM otel/opentelemetry-collector-contrib:${OTEL_VERSION} AS contrib
 
 # ebpf target: supervisor base + the OCB-built collector (has `obi`).
 FROM ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-opampsupervisor:${OTEL_VERSION} AS ebpf
+ARG OTEL_VERSION
+ARG OBI_VERSION
+# The image is tagged with xscaler's own distro version; these labels record the
+# bundled upstream versions so `docker inspect` reveals what's inside.
+LABEL org.opentelemetry.collector.version="${OTEL_VERSION}" \
+      io.xscaler.obi.version="${OBI_VERSION}"
 COPY --from=ocb-build /build/otelcol-contrib /usr/local/bin/otelcol-contrib
 
 # default target (LAST stage): supervisor base + prebuilt contrib collector.
 FROM ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-opampsupervisor:${OTEL_VERSION} AS default
+ARG OTEL_VERSION
+LABEL org.opentelemetry.collector.version="${OTEL_VERSION}"
 COPY --from=contrib /otelcol-contrib /usr/local/bin/otelcol-contrib

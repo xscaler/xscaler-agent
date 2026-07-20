@@ -1,0 +1,48 @@
+xscaler-agent "{{ .Release.Name }}" installed in namespace "{{ .Release.Namespace }}".
+
+OpAMP endpoint : {{ .Values.opampEndpoint }}
+Node agent     : {{ if .Values.nodeAgent.enabled }}DaemonSet {{ include "xscaler-agent.fullname" . }}-{{ .Values.nodeAgent.name }}{{ else }}disabled{{ end }}
+Cluster agent  : {{ if .Values.clusterAgent.enabled }}Deployment {{ include "xscaler-agent.fullname" . }}-{{ .Values.clusterAgent.name }} ({{ .Values.clusterAgent.replicas }} replica){{ else }}disabled{{ end }}
+
+Verify enrollment:
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} --tail=20 | grep -i "connected to the server"
+
+The agents enroll into agent-api and wait for a pushed collector config.
+Until an assignment targets them (match on labels role={{ .Values.nodeAgent.name }}/{{ .Values.clusterAgent.name }}, {{ range $k,$v := .Values.labels }}{{ $k }}={{ $v }} {{ end }}),
+they report "No last received remote config found" — that is expected.
+{{- $traces := .Values.nodeAgent.traces | default dict }}
+{{- if and .Values.nodeAgent.enabled $traces.enabled }}
+
+Traces intake is exposed via "{{ $traces.expose | default "service" }}". Note the receiver
+itself must be turned on by the pushed OpAMP config (an `otlp` receiver bound to
+0.0.0.0 + a `traces` pipeline) before these ports accept spans.
+{{- if eq ($traces.expose | default "service") "service" }}
+
+Point apps (or the OTel Operator Instrumentation CR) at the node-local endpoint:
+
+  http://{{ include "xscaler-agent.fullname" . }}-{{ .Values.nodeAgent.name }}-traces.{{ .Release.Namespace }}.svc:{{ $traces.httpPort | default 4318 }}
+
+Example Instrumentation CR (namespaced — create one per app namespace):
+
+  apiVersion: opentelemetry.io/v1alpha1
+  kind: Instrumentation
+  metadata: { name: xscaler, namespace: <app-namespace> }
+  spec:
+    exporter:
+      endpoint: http://{{ include "xscaler-agent.fullname" . }}-{{ .Values.nodeAgent.name }}-traces.{{ .Release.Namespace }}.svc:{{ $traces.httpPort | default 4318 }}
+    propagators: [tracecontext, baggage]
+
+Then annotate workloads, e.g. instrumentation.opentelemetry.io/inject-java: "true".
+{{- else }}
+
+Apps reach the node-local receiver via the node IP (downward API):
+
+  env:
+    - name: NODE_IP
+      valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: "http://$(NODE_IP):{{ $traces.httpPort | default 4318 }}"
+{{- end }}
+{{- end }}
