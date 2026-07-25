@@ -200,3 +200,8 @@ So one number in `Chart.yaml` drives the git tag, both image tags, and the chart
 version/appVersion in lockstep. The first publish of each package (images and
 chart) creates it as private — set it public once in the GitHub package
 settings.
+
+## License
+
+Apache License 2.0. Copyright 2026 XSCALER LTD. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
