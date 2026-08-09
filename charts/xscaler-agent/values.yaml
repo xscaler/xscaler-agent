@@ -31,6 +31,11 @@ labels:
 # Supervisor storage dir (inside the container; ephemeral emptyDir).
 storageDir: /var/lib/opampsupervisor
 
+clusterName: "kubernetes"
+
+instanceUid:
+  image: "alpine:3.20"
+
 # ---- Node agent (DaemonSet): host metrics, container logs, kubelet stats ----
 nodeAgent:
   enabled: true
@@ -68,7 +73,7 @@ nodeAgent:
     # Cluster name reported to OBI (OTEL_EBPF_KUBE_CLUSTER_NAME). Needed for
     # PID->pod->namespace correlation so `discovery.instrument: [{k8s_namespace}]`
     # selectors match; also stamps k8s.cluster.name on spans/metrics.
-    clusterName: "kubernetes"
+    clusterName: ""
   # ---- Traces intake (OTLP receiver reachability) ----------------------------
   # The traces `otlp` receiver + pipeline itself is a pushed OpAMP config, not
   # part of this chart. This only opens the network path so pods can reach the

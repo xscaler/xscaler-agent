@@ -36,6 +36,8 @@ spec:
       {{- end }}
       tolerations:
         {{- toYaml .Values.nodeAgent.tolerations | nindent 8 }}
+      initContainers:
+        {{- include "xscaler-agent.identityInit" (dict "ctx" . "role" .Values.nodeAgent.name "nodeScoped" true) | nindent 8 }}
       containers:
         - name: supervisor
           image: {{ include "xscaler-agent.nodeImage" . | quote }}
@@ -78,7 +80,7 @@ spec:
             - name: OTEL_EBPF_KUBE_METADATA_ENABLE
               value: "true"
             - name: OTEL_EBPF_KUBE_CLUSTER_NAME
-              value: {{ .Values.nodeAgent.ebpf.clusterName | default "kubernetes" | quote }}
+              value: {{ .Values.nodeAgent.ebpf.clusterName | default .Values.clusterName | default "kubernetes" | quote }}
             {{- end }}
           resources:
             {{- toYaml .Values.nodeAgent.resources | nindent 12 }}

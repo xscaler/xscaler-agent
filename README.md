@@ -110,6 +110,30 @@ docker run --rm \
 The image's entrypoint is `opampsupervisor` (inherited from the base image); it
 launches and manages `/usr/local/bin/otelcol-contrib`.
 
+### Stable instance UID on Kubernetes
+
+The supervisor keys each fleet agent on its OpAMP `instance_uid`, which it
+persists in `<storage.directory>/persistent_state.yaml`. In the Helm chart that
+directory is an `emptyDir`, so a pod restart would wipe it, the supervisor would
+mint a fresh random UID, and the fleet view would show a **new online agent plus
+the old one going offline** — one ghost per restart.
+
+To prevent that, the chart derives the UID deterministically from stable cluster
+identity instead of relying on persisted state. A `derive-instance-uid` init
+container hashes a cluster-qualified identity (SHA-256 → a name-based UUID) and
+writes it to `persistent_state.yaml` before the supervisor starts:
+
+- **Node agent (DaemonSet)** — identity is `"<clusterName>/<nodeName>"`
+  (`spec.nodeName` via the Downward API), 1:1 with the DaemonSet pod.
+- **Cluster agent (Deployment)** — identity is `"<clusterName>/<role>"`.
+
+Same identity → same UID → the existing fleet row flips offline→online on
+restart, and no ghost is created. There's no namespace/salt to configure:
+`clusterName` makes the identity globally unique (agent-api partitions rows by
+`(org, instance_uid)`), so **set `clusterName` distinctly per cluster** —
+otherwise two clusters left at the default would derive colliding UIDs. See
+`charts/xscaler-agent/values.yaml`.
+
 ### Host binary via systemd
 
 For host/VM fleets, run the supervisor as a service. Extract the two binaries
