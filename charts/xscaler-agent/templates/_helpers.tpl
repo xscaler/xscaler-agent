@@ -95,3 +95,43 @@ agent:
 storage:
   directory: {{ $ctx.Values.storageDir | quote }}
 {{- end -}}
+
+{{- define "xscaler-agent.deriveUidScript" -}}
+set -eu
+: "${XSCALER_AGENT_IDENTITY:?identity is empty}"
+uid=$(printf '%s' "$XSCALER_AGENT_IDENTITY" | sha256sum | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')
+printf 'instance_id: %s\n' "$uid" > "$STORAGE_DIR/persistent_state.yaml"
+echo "derived OpAMP instance_uid=$uid identity=$XSCALER_AGENT_IDENTITY"
+{{- end -}}
+
+{{- define "xscaler-agent.identityInit" -}}
+{{- $ctx := .ctx -}}
+{{- $role := .role -}}
+{{- $cluster := default "kubernetes" $ctx.Values.clusterName -}}
+- name: derive-instance-uid
+  image: {{ $ctx.Values.instanceUid.image | quote }}
+  imagePullPolicy: {{ $ctx.Values.image.pullPolicy }}
+  securityContext:
+    runAsUser: 10001
+    runAsGroup: 10001
+  command: ["/bin/sh", "-c"]
+  args:
+    - |
+      {{- include "xscaler-agent.deriveUidScript" $ctx | nindent 6 }}
+  env:
+    - name: STORAGE_DIR
+      value: {{ $ctx.Values.storageDir | quote }}
+    {{- if .nodeScoped }}
+    - name: K8S_NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+    - name: XSCALER_AGENT_IDENTITY
+      value: {{ printf "%s/$(K8S_NODE_NAME)" $cluster | quote }}
+    {{- else }}
+    - name: XSCALER_AGENT_IDENTITY
+      value: {{ printf "%s/%s" $cluster $role | quote }}
+    {{- end }}
+  volumeMounts:
+    - { name: storage, mountPath: {{ $ctx.Values.storageDir | quote }} }
+{{- end -}}

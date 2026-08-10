@@ -28,6 +28,8 @@ spec:
       {{- with .Values.clusterAgent.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}
+      initContainers:
+        {{- include "xscaler-agent.identityInit" (dict "ctx" . "role" .Values.clusterAgent.name "nodeScoped" false) | nindent 8 }}
       containers:
         - name: supervisor
           image: {{ include "xscaler-agent.clusterImage" . | quote }}
