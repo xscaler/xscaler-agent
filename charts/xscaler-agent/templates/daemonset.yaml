@@ -73,6 +73,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # The node's IP, for pushed configs that must *dial* the node —
+            # kubeletstats' endpoint above all. Node names only resolve in DNS
+            # on some providers (EKS does, GKE/AKS do not), so the name is safe
+            # to report as an attribute but not to connect to. Both vars are
+            # set: K8S_NODE_NAME stays the value for k8s.node.name.
+            - name: K8S_NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             {{- if .Values.nodeAgent.ebpf.enabled }}
             # OBI Kubernetes metadata: enables PID->pod->namespace correlation so
             # `discovery.instrument: [{k8s_namespace: ...}]` selectors match, and
