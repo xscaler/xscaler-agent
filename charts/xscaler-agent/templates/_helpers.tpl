@@ -91,6 +91,13 @@ agent:
       {{- range $k, $v := $ctx.Values.labels }}
       {{ $k }}: {{ $v | quote }}
       {{- end }}
+      {{- if eq $role $ctx.Values.nodeAgent.name }}
+      # Capability flag: this pod spec sets K8S_NODE_IP, so a pushed config may
+      # dial the node by IP. Assignments select it with `Exists`. Node role only
+      # (the cluster Deployment has no such var), and placed after the user
+      # labels so values.yaml cannot contradict the pod spec.
+      node_ip: "true"
+      {{- end }}
 
 storage:
   directory: {{ $ctx.Values.storageDir | quote }}

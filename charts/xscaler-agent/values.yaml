@@ -23,7 +23,11 @@ existingSecret:
 
 # -- Labels reported to agent-api as non_identifying_attributes. The config-
 # match engine (label selectors on assignments) targets agents by these.
-# `role` is added per-workload (node|cluster); do not set it here.
+# `role` is added per-workload (node|cluster); do not set it here. The node
+# workload also reports `node_ip: "true"`, a capability flag saying its pod spec
+# sets K8S_NODE_IP so a pushed config can dial the node by IP rather than by
+# name (node names do not resolve in DNS on GKE/AKS). The chart emits it; a
+# value set here cannot override it.
 labels:
   platform: kubernetes
   environment: dev
