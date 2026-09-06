@@ -78,6 +78,9 @@ nodeAgent:
     # PID->pod->namespace correlation so `discovery.instrument: [{k8s_namespace}]`
     # selectors match; also stamps k8s.cluster.name on spans/metrics.
     clusterName: ""
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { memory: 1Gi }
   # ---- Traces intake (OTLP receiver reachability) ----------------------------
   # The traces `otlp` receiver + pipeline itself is a pushed OpAMP config, not
   # part of this chart. This only opens the network path so pods can reach the
