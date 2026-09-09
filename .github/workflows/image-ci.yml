@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "Dockerfile"
+      - "builder.yaml"
       - ".github/workflows/image-ci.yml"
 
 permissions:
@@ -10,7 +11,23 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavour: default
+            target: default
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - flavour: ebpf
+            target: ebpf
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - flavour: ebpf
+            target: ebpf
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,14 +35,14 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build default image (amd64, no push)
+      - name: Build ${{ matrix.flavour }} image (${{ matrix.platform }}, no push)
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: default
-          platforms: linux/amd64
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
           push: false
           # Warm from the release build's cache; write to a separate CI scope so
           # PRs never clobber the cache the release relies on.
-          cache-from: type=gha,scope=default-linux/amd64
-          cache-to: type=gha,mode=max,scope=ci-default-linux/amd64
+          cache-from: type=gha,scope=${{ matrix.flavour }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.flavour }}-${{ matrix.platform }}
