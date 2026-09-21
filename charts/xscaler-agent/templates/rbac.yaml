@@ -17,6 +17,8 @@ rules:
       - nodes/spec
       - nodes/stats
       - nodes/proxy
+      - persistentvolumeclaims
+      - persistentvolumes
       - pods
       - pods/status
       - replicationcontrollers
@@ -25,6 +27,10 @@ rules:
       - services
       - endpoints
     verbs: ["get", "list", "watch"]
+  # cAdvisor / node metrics endpoint scraped by the kubeletstats + prometheus receivers.
+  - apiGroups: [""]
+    resources: ["nodes/metrics"]
+    verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
     verbs: ["get", "list", "watch"]
