@@ -186,6 +186,12 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
 
+      - name: Fetch chart dependencies
+        # Vendors the optional kube-state-metrics subchart into charts/ at the
+        # version Chart.lock pins, so it ships inside the packaged tgz. Without
+        # this, `helm package` fails on the missing dependency.
+        run: helm dependency build "${CHART_DIR}"
+
       - name: Package and push
         # The distro version drives both the chart version and the appVersion
         # (which the chart uses as the image tag).

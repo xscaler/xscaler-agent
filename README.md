@@ -161,6 +161,53 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now xscaler-agent
 ```
 
+## kube-state-metrics (optional subchart)
+
+The chart can install
+[kube-state-metrics](https://github.com/kubernetes/kube-state-metrics) alongside
+the agents, as a Helm dependency gated on a condition. It's **off by default**:
+many clusters already run one (kube-prometheus-stack bundles it), and a second
+copy only doubles the API-server watch load. Check first:
+
+```sh
+kubectl get deploy -A -l app.kubernetes.io/name=kube-state-metrics
+```
+
+Then enable it:
+
+```sh
+helm install xscaler charts/xscaler-agent \
+  --set enrollmentToken=xse_... \
+  --set kube-state-metrics.enabled=true
+```
+
+KSM exposes cluster-object state (deployment replicas, pod phase, job/cronjob
+status, PVC binding) as Prometheus metrics — signals the `k8s_cluster` and
+`kubeletstats` receivers don't produce.
+
+**The chart installs the target, not the scrape.** Like every other pipeline
+here, the `prometheus` receiver that reads KSM arrives as a pushed OpAMP config.
+So a pushed config can find it, the **cluster** agent reports two extra
+non-identifying attributes whenever the subchart is enabled:
+
+| Attribute | Value |
+| --- | --- |
+| `kube_state_metrics` | `"true"` — a capability flag, same idea as `node_ip`; select on it in an assignment |
+| `kube_state_metrics_endpoint` | e.g. `xscaler-kube-state-metrics.observability.svc.cluster.local:8080` |
+
+Both are chart-emitted and can't be overridden from `labels`, so they always
+describe what is actually deployed. Scrape from the cluster agent, not the node
+DaemonSet — one exporter wants one scraper, not one per node.
+
+Everything under the `kube-state-metrics:` block in `values.yaml` belongs to
+[the upstream chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-state-metrics);
+the chart sets only `replicas`, CPU/memory **requests** (no memory limit — KSM's
+footprint tracks cluster object count, and a limit sized for a small cluster
+OOMKills it on a big one) and disables the ServiceMonitor. The version is pinned
+in `Chart.yaml` and locked in `Chart.lock`; run `helm dependency build
+charts/xscaler-agent` after cloning, and `helm dependency update` when bumping
+the pin.
+
 ## eBPF (OBI) flavour
 
 The `ebpf` image adds the
