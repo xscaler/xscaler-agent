@@ -27,8 +27,9 @@ maintainers:
 # subchart's own name, so `--set kube-state-metrics.enabled=true` is what
 # turns it on. Pinned exactly: a floating range would let a chart bump ride
 # in on an unrelated release.
+
 dependencies:
   - name: kube-state-metrics
     version: "8.5.0"
-    repository: https://prometheus-community.github.io/helm-charts
+    repository: oci://ghcr.io/prometheus-community/charts
     condition: kube-state-metrics.enabled

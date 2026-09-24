@@ -189,7 +189,9 @@ jobs:
       - name: Fetch chart dependencies
         # Vendors the optional kube-state-metrics subchart into charts/ at the
         # version Chart.lock pins, so it ships inside the packaged tgz. Without
-        # this, `helm package` fails on the missing dependency.
+        # this, `helm package` fails on the missing dependency. No `helm repo
+        # add` needed — the dependency is an oci:// ref, which resolves straight
+        # from the registry on a fresh runner.
         run: helm dependency build "${CHART_DIR}"
 
       - name: Package and push

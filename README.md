@@ -203,10 +203,41 @@ Everything under the `kube-state-metrics:` block in `values.yaml` belongs to
 [the upstream chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-state-metrics);
 the chart sets only `replicas`, CPU/memory **requests** (no memory limit — KSM's
 footprint tracks cluster object count, and a limit sized for a small cluster
-OOMKills it on a big one) and disables the ServiceMonitor. The version is pinned
-in `Chart.yaml` and locked in `Chart.lock`; run `helm dependency build
-charts/xscaler-agent` after cloning, and `helm dependency update` when bumping
-the pin.
+OOMKills it on a big one) and disables the ServiceMonitor.
+
+### Installing the published chart
+
+Nothing extra to do — the release workflow vendors the subchart into the
+packaged archive, so it ships **inside** the chart. Installing from the registry
+needs no `helm repo add` and no network to prometheus-community, whether or not
+you enable it:
+
+```sh
+helm install xscaler oci://ghcr.io/xscaler/charts/xscaler-agent --version 0.4.0 \
+  --set enrollmentToken=xse_... \
+  --set kube-state-metrics.enabled=true
+```
+
+### Installing from a clone
+
+A source checkout has no `charts/` directory — the vendored archive is
+gitignored — so fetch dependencies once before the first `helm install` or
+`helm template`, which fail without it:
+
+> Error: found in Chart.yaml, but missing in charts/ directory: kube-state-metrics
+
+`helm lint` is the exception: it downgrades this to a warning and still exits 0,
+so a green lint doesn't mean the chart would install.
+
+```sh
+helm dependency build charts/xscaler-agent
+```
+
+That's the whole setup — no `helm repo add`. The dependency is declared as an
+`oci://` ref (prometheus-community's registry mirror), which helm resolves
+without the repo being in your local list. The version is pinned in `Chart.yaml`
+and locked in `Chart.lock` — `dependency build` honours the lock, while
+`dependency update` re-resolves it and is what you want when bumping the pin.
 
 ## eBPF (OBI) flavour
 
