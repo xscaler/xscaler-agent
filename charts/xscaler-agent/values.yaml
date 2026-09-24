@@ -114,3 +114,43 @@ rbac:
 serviceAccount:
   create: true
   name: ""   # defaults to the release fullname
+
+# ---- kube-state-metrics (optional subchart) ---------------------------------
+# Cluster-object state as Prometheus metrics (deployment replicas, pod phase,
+# job/cronjob status, PVC binding, ...) — signals the k8s_cluster and
+# kubeletstats receivers don't produce.
+#
+# Off by default on purpose: plenty of clusters already run one (kube-prometheus-
+# stack bundles it), and a second copy just doubles the API-server watch load.
+# Check with `kubectl get deploy -A -l app.kubernetes.io/name=kube-state-metrics`
+# before enabling.
+#
+# Enabling this installs the *target* only. Nothing scrapes it from the chart —
+# the `prometheus` receiver that reads it arrives as a pushed OpAMP config, same
+# as every other pipeline here. So that a pushed config can find it, the cluster
+# agent reports `kube_state_metrics: "true"` and the resolved
+# `kube_state_metrics_endpoint` as non-identifying attributes when this is on
+# (assignments select on the flag, scrape the endpoint). Scrape it from the
+# cluster agent, not the node DaemonSet — one KSM, one scraper.
+#
+# Every key below belongs to the upstream chart, not to us:
+# https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-state-metrics
+# Anything not listed keeps that chart's default.
+kube-state-metrics:
+  # Gates the dependency (Chart.yaml `condition`). Not an upstream key.
+  enabled: false
+  # Service/Deployment name; empty => <release>-kube-state-metrics, which is
+  # what kube_state_metrics_endpoint reports. Pin it only if you'd rather
+  # hard-code the scrape target in a pushed config than read it off the agent.
+  fullnameOverride: ""
+  replicas: 1
+  # Requests only, deliberately: KSM's memory tracks the cluster's object count,
+  # and a limit that fits a small cluster OOMKills the exporter on a big one —
+  # losing exactly the metrics you'd need to see it growing.
+  resources:
+    requests: { cpu: 10m, memory: 64Mi }
+  prometheus:
+    monitor:
+      # The collector scrapes via a pushed prometheus receiver, not the
+      # Prometheus Operator — no ServiceMonitor wanted.
+      enabled: false

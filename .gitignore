@@ -6,6 +6,10 @@ supervisor/
 supervisor.yaml
 *.supervisor.yaml
 
+# Vendored subchart archives — fetched by `helm dependency build` from the
+# versions Chart.lock pins, so the tgz files don't belong in git.
+/charts/*/charts/
+
 # OS / editor cruft
 .DS_Store
 *.swp

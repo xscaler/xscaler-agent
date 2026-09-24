@@ -1,0 +1,6 @@
+dependencies:
+- name: kube-state-metrics
+  repository: oci://ghcr.io/prometheus-community/charts
+  version: 8.5.0
+digest: sha256:920328d0cdbbdedd92578689cfacedd9472cec843e8c5bb6299132a45245c5ef
+generated: "2026-09-24T11:56:30.833859+03:00"

@@ -59,6 +59,43 @@ variant, so the DaemonSet uses `<tag>-ebpf` when eBPF is on and the plain
 {{- end -}}
 
 {{/*
+kube-state-metrics subchart values, or an empty dict when the dependency is
+absent. `kube-state-metrics` is hyphenated, so it needs `index`, not `.foo`.
+*/}}
+{{- define "xscaler-agent.ksmValues" -}}
+{{- default dict (index .Values "kube-state-metrics") | toYaml -}}
+{{- end -}}
+
+{{/*
+Service name of the kube-state-metrics subchart. Mirrors that chart's own
+fullname helper — the value has to be computed here rather than read from it,
+since a parent template can't call a subchart's defines.
+*/}}
+{{- define "xscaler-agent.ksmFullname" -}}
+{{- $ksm := include "xscaler-agent.ksmValues" . | fromYaml -}}
+{{- if $ksm.fullnameOverride -}}
+{{- $ksm.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "kube-state-metrics" $ksm.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* host:port a pushed prometheus receiver should scrape kube-state-metrics at */}}
+{{- define "xscaler-agent.ksmEndpoint" -}}
+{{- $ksm := include "xscaler-agent.ksmValues" . | fromYaml -}}
+{{- $port := 8080 -}}
+{{- if $ksm.service -}}
+{{- $port = default 8080 $ksm.service.port -}}
+{{- end -}}
+{{- printf "%s.%s.svc.cluster.local:%v" (include "xscaler-agent.ksmFullname" .) .Release.Namespace $port -}}
+{{- end -}}
+
+{{/*
 supervisor.yaml body. Arg is a dict: { "ctx": $, "role": "node"|"cluster" }.
 The bearer token is injected at runtime from a Secret via env expansion
 (${XSCALER_ENROLLMENT_TOKEN}), which the supervisor resolves in headers.
@@ -97,6 +134,15 @@ agent:
       # (the cluster Deployment has no such var), and placed after the user
       # labels so values.yaml cannot contradict the pod spec.
       node_ip: "true"
+      {{- end }}
+      {{- if and (eq $role $ctx.Values.clusterAgent.name) (dig "enabled" false (default dict (index $ctx.Values "kube-state-metrics"))) }}
+      # Capability flag: this release installs the kube-state-metrics subchart,
+      # so a pushed prometheus receiver can scrape it at the endpoint below.
+      # Cluster role only — one exporter wants one scraper, not one per node.
+      # Chart-emitted like node_ip, and placed after the user labels so
+      # values.yaml cannot contradict what is actually deployed.
+      kube_state_metrics: "true"
+      kube_state_metrics_endpoint: {{ include "xscaler-agent.ksmEndpoint" $ctx | quote }}
       {{- end }}
 
 storage:

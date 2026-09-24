@@ -161,6 +161,84 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now xscaler-agent
 ```
 
+## kube-state-metrics (optional subchart)
+
+The chart can install
+[kube-state-metrics](https://github.com/kubernetes/kube-state-metrics) alongside
+the agents, as a Helm dependency gated on a condition. It's **off by default**:
+many clusters already run one (kube-prometheus-stack bundles it), and a second
+copy only doubles the API-server watch load. Check first:
+
+```sh
+kubectl get deploy -A -l app.kubernetes.io/name=kube-state-metrics
+```
+
+Then enable it:
+
+```sh
+helm install xscaler charts/xscaler-agent \
+  --set enrollmentToken=xse_... \
+  --set kube-state-metrics.enabled=true
+```
+
+KSM exposes cluster-object state (deployment replicas, pod phase, job/cronjob
+status, PVC binding) as Prometheus metrics — signals the `k8s_cluster` and
+`kubeletstats` receivers don't produce.
+
+**The chart installs the target, not the scrape.** Like every other pipeline
+here, the `prometheus` receiver that reads KSM arrives as a pushed OpAMP config.
+So a pushed config can find it, the **cluster** agent reports two extra
+non-identifying attributes whenever the subchart is enabled:
+
+| Attribute | Value |
+| --- | --- |
+| `kube_state_metrics` | `"true"` — a capability flag, same idea as `node_ip`; select on it in an assignment |
+| `kube_state_metrics_endpoint` | e.g. `xscaler-kube-state-metrics.observability.svc.cluster.local:8080` |
+
+Both are chart-emitted and can't be overridden from `labels`, so they always
+describe what is actually deployed. Scrape from the cluster agent, not the node
+DaemonSet — one exporter wants one scraper, not one per node.
+
+Everything under the `kube-state-metrics:` block in `values.yaml` belongs to
+[the upstream chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-state-metrics);
+the chart sets only `replicas`, CPU/memory **requests** (no memory limit — KSM's
+footprint tracks cluster object count, and a limit sized for a small cluster
+OOMKills it on a big one) and disables the ServiceMonitor.
+
+### Installing the published chart
+
+Nothing extra to do — the release workflow vendors the subchart into the
+packaged archive, so it ships **inside** the chart. Installing from the registry
+needs no `helm repo add` and no network to prometheus-community, whether or not
+you enable it:
+
+```sh
+helm install xscaler oci://ghcr.io/xscaler/charts/xscaler-agent --version 0.4.0 \
+  --set enrollmentToken=xse_... \
+  --set kube-state-metrics.enabled=true
+```
+
+### Installing from a clone
+
+A source checkout has no `charts/` directory — the vendored archive is
+gitignored — so fetch dependencies once before the first `helm install` or
+`helm template`, which fail without it:
+
+> Error: found in Chart.yaml, but missing in charts/ directory: kube-state-metrics
+
+`helm lint` is the exception: it downgrades this to a warning and still exits 0,
+so a green lint doesn't mean the chart would install.
+
+```sh
+helm dependency build charts/xscaler-agent
+```
+
+That's the whole setup — no `helm repo add`. The dependency is declared as an
+`oci://` ref (prometheus-community's registry mirror), which helm resolves
+without the repo being in your local list. The version is pinned in `Chart.yaml`
+and locked in `Chart.lock` — `dependency build` honours the lock, while
+`dependency update` re-resolves it and is what you want when bumping the pin.
+
 ## eBPF (OBI) flavour
 
 The `ebpf` image adds the

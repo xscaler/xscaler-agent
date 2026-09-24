@@ -20,6 +20,13 @@ jobs:
         with:
           version: v3.15.4
 
+      - name: Fetch chart dependencies
+        # `build` (not `update`) so the pinned Chart.lock is what gets fetched;
+        # every helm step below fails without the subchart present in charts/.
+        # No `helm repo add` needed — the dependency is an oci:// ref, which
+        # resolves straight from the registry on a fresh runner.
+        run: helm dependency build charts/xscaler-agent
+
       - name: Lint
         run: helm lint charts/xscaler-agent --set enrollmentToken=xse_ci
 
@@ -32,6 +39,12 @@ jobs:
             --set enrollmentToken=xse_ci \
             --set nodeAgent.ebpf.enabled=true \
             --set nodeAgent.traces.enabled=true >/dev/null
+
+      - name: Template (kube-state-metrics)
+        run: |
+          helm template ci charts/xscaler-agent \
+            --set enrollmentToken=xse_ci \
+            --set kube-state-metrics.enabled=true >/dev/null
 
   actions:
     runs-on: ubuntu-24.04
