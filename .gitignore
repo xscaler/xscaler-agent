@@ -13,3 +13,4 @@ supervisor.yaml
 # OS / editor cruft
 .DS_Store
 *.swp
+dist/
