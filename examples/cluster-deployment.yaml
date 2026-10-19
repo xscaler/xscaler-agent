@@ -1,0 +1,161 @@
+# Cluster Deployment (2 replicas, one active): cluster state, warnings and
+# rollouts. k8s_leader_elector keeps the standby replica idle until the lease
+# moves, so nothing is collected twice.
+#
+# Change events: every Kubernetes event about a Deployment or ReplicaSet
+# (ScalingReplicaSet, SuccessfulCreate, ...) is kept alongside every Warning,
+# so each rollout is recorded with the workload it changed. The service model
+# joins it to a service through k8s.namespace.name + k8s.deployment.name, the
+# same keys the node agent stamps on that workload's telemetry.
+#
+# k8s_cluster pod and container metrics get the same service identity the
+# node agent gives that pod's logs and traces (k8s_attributes, cluster-wide,
+# then transform/xscaler_service). The rules apply to pod resources only:
+# naming a Deployment's own metrics after the Deployment would split one
+# service in two when its pods carry an app label.
+#
+# Env: XSCALER_{METRICS,LOGS}_ENDPOINT, XSCALER_TOKEN, XSCALER_TENANT_ID,
+# XSCALER_CLUSTER_NAME, XSCALER_QUEUE_DIR, POD_NAMESPACE (downward API).
+
+extensions:
+  health_check: { endpoint: "0.0.0.0:13133" }
+  file_storage:
+    directory: ${env:XSCALER_QUEUE_DIR:-/var/lib/xscaler-collector/queue}
+    create_directory: true
+    timeout: 1s
+  k8s_leader_elector:
+    auth_type: serviceAccount
+    lease_name: xscaler-collector-cluster
+    lease_namespace: ${env:POD_NAMESPACE:-xscaler}
+
+receivers:
+  k8s_cluster:
+    k8s_leader_elector: k8s_leader_elector
+    collection_interval: 60s
+    node_conditions_to_report: [Ready, MemoryPressure, DiskPressure]
+    allocatable_types_to_report: [cpu, memory]
+  k8s_objects:
+    k8s_leader_elector: k8s_leader_elector
+    objects:
+      # All core/v1 events; filter/xscaler_events keeps the ones we want.
+      # (A field selector cannot OR "type=Warning" with "involvedObject.kind".)
+      - name: events
+        mode: watch
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+
+  k8s_attributes:
+    auth_type: serviceAccount
+    passthrough: false
+    pod_association:
+      - sources: [{ from: resource_attribute, name: k8s.pod.uid }]
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.node.name
+        - k8s.deployment.name
+        - k8s.replicaset.name
+        - k8s.statefulset.name
+        - k8s.daemonset.name
+        - k8s.cronjob.name
+        - k8s.job.name
+      labels:
+        - { tag_name: xscaler.k8s.app.name, key: app.kubernetes.io/name, from: pod }
+        - { tag_name: xscaler.k8s.app.version, key: app.kubernetes.io/version, from: pod }
+
+  # node-daemonset.yaml's rules, limited to resources that belong to a pod.
+  transform/xscaler_service:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes["service.name"], resource.attributes["xscaler.k8s.app.name"]) where (resource.attributes["service.name"] == nil or IsMatch(resource.attributes["service.name"], "^unknown_service")) and resource.attributes["xscaler.k8s.app.name"] != nil and resource.attributes["k8s.pod.uid"] != nil
+          - set(resource.attributes["service.name"], resource.attributes["k8s.deployment.name"]) where (resource.attributes["service.name"] == nil or IsMatch(resource.attributes["service.name"], "^unknown_service")) and resource.attributes["k8s.deployment.name"] != nil and resource.attributes["k8s.pod.uid"] != nil
+          - set(resource.attributes["service.name"], resource.attributes["k8s.statefulset.name"]) where (resource.attributes["service.name"] == nil or IsMatch(resource.attributes["service.name"], "^unknown_service")) and resource.attributes["k8s.statefulset.name"] != nil and resource.attributes["k8s.pod.uid"] != nil
+          - set(resource.attributes["service.name"], resource.attributes["k8s.daemonset.name"]) where (resource.attributes["service.name"] == nil or IsMatch(resource.attributes["service.name"], "^unknown_service")) and resource.attributes["k8s.daemonset.name"] != nil and resource.attributes["k8s.pod.uid"] != nil
+          - set(resource.attributes["service.name"], resource.attributes["k8s.cronjob.name"]) where (resource.attributes["service.name"] == nil or IsMatch(resource.attributes["service.name"], "^unknown_service")) and resource.attributes["k8s.cronjob.name"] != nil and resource.attributes["k8s.pod.uid"] != nil
+          - set(resource.attributes["service.name"], resource.attributes["k8s.job.name"]) where (resource.attributes["service.name"] == nil or IsMatch(resource.attributes["service.name"], "^unknown_service")) and resource.attributes["k8s.job.name"] != nil and resource.attributes["k8s.pod.uid"] != nil
+          - set(resource.attributes["service.namespace"], resource.attributes["k8s.namespace.name"]) where resource.attributes["service.namespace"] == nil and resource.attributes["k8s.namespace.name"] != nil and resource.attributes["k8s.pod.uid"] != nil
+          - set(resource.attributes["service.version"], resource.attributes["xscaler.k8s.app.version"]) where resource.attributes["service.version"] == nil and resource.attributes["xscaler.k8s.app.version"] != nil
+          - delete_key(resource.attributes, "xscaler.k8s.app.name")
+          - delete_key(resource.attributes, "xscaler.k8s.app.version")
+
+  # Keep Warnings and anything about a Deployment or ReplicaSet.
+  filter/xscaler_events:
+    error_mode: ignore
+    logs:
+      log_record:
+        - body["object"]["type"] != "Warning" and body["object"]["involvedObject"]["kind"] != "Deployment" and body["object"]["involvedObject"]["kind"] != "ReplicaSet"
+
+  # Lift what people filter on out of the raw watch envelope, and name the
+  # workload a change event belongs to with the same keys workload telemetry
+  # carries. A ReplicaSet is named <deployment>-<pod-template-hash>.
+  transform/xscaler_events:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["k8s.event.reason"], body["object"]["reason"])
+          - set(attributes["k8s.event.type"], body["object"]["type"])
+          - set(attributes["k8s.event.message"], body["object"]["message"])
+          - set(attributes["k8s.event.count"], body["object"]["count"])
+          - set(attributes["k8s.event.uid"], body["object"]["metadata"]["uid"])
+          - set(attributes["k8s.namespace.name"], body["object"]["involvedObject"]["namespace"])
+          - set(attributes["k8s.object.kind"], body["object"]["involvedObject"]["kind"])
+          - set(attributes["k8s.object.name"], body["object"]["involvedObject"]["name"])
+          - set(attributes["k8s.node.name"], body["object"]["source"]["host"])
+          - set(attributes["k8s.deployment.name"], body["object"]["involvedObject"]["name"]) where body["object"]["involvedObject"]["kind"] == "Deployment"
+          - set(attributes["k8s.replicaset.name"], body["object"]["involvedObject"]["name"]) where body["object"]["involvedObject"]["kind"] == "ReplicaSet"
+          - set(attributes["k8s.deployment.name"], body["object"]["involvedObject"]["name"]) where body["object"]["involvedObject"]["kind"] == "ReplicaSet"
+          - replace_pattern(attributes["k8s.deployment.name"], "-[a-z0-9]{1,10}$", "") where body["object"]["involvedObject"]["kind"] == "ReplicaSet"
+          # xscaler.event.category=change marks rollouts for the service model.
+          - set(attributes["xscaler.event.category"], "warning") where body["object"]["type"] == "Warning"
+          - set(attributes["xscaler.event.category"], "change") where body["object"]["type"] != "Warning"
+
+  resource/xscaler_agent:
+    attributes:
+      - { key: xscaler.agent.id, value: "${xscaler:agent_id}", action: upsert }
+      - { key: xscaler.agent.profile, value: k8s_cluster, action: upsert }
+      - { key: k8s.cluster.name, value: "${env:XSCALER_CLUSTER_NAME}", action: upsert }
+
+  batch: { timeout: 5s, send_batch_size: 512 }
+
+exporters:
+  otlp_http/metrics:
+    metrics_endpoint: ${env:XSCALER_METRICS_ENDPOINT}
+    headers: &auth
+      Authorization: "Bearer ${env:XSCALER_TOKEN}"
+      X-Scope-OrgID: "${env:XSCALER_TENANT_ID}"
+    sending_queue: &queue
+      enabled: true
+      storage: file_storage
+    retry_on_failure: &retry
+      enabled: true
+      max_elapsed_time: 0
+  otlp_http/logs:
+    logs_endpoint: ${env:XSCALER_LOGS_ENDPOINT}
+    headers: *auth
+    sending_queue: *queue
+    retry_on_failure: *retry
+
+service:
+  extensions: [health_check, file_storage, k8s_leader_elector]
+  pipelines:
+    metrics:
+      receivers: [k8s_cluster]
+      processors: [memory_limiter, k8s_attributes, transform/xscaler_service, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    logs:
+      receivers: [k8s_objects]
+      processors: [memory_limiter, filter/xscaler_events, transform/xscaler_events, resource/xscaler_agent, batch]
+      exporters: [otlp_http/logs]
+  telemetry:
+    metrics:
+      readers:
+        - pull: { exporter: { prometheus: { host: 0.0.0.0, port: 8888 } } }

@@ -1,0 +1,29 @@
+# Overlay for node-daemonset.yaml on nodes where the pod holds the BPF
+# capabilities (chart: nodeAgent.ebpf.enabled). Load both:
+#   xscaler-collector --config node-daemonset.yaml --config node-daemonset-ebpf.yaml
+# Lists replace, they do not append, so the receiver lists are restated.
+#
+# OBI names services itself (k8s metadata, then the executable) and stamps
+# k8s.pod.name + k8s.namespace.name, so its spans and RED metrics go through
+# the same k8s_attributes and transform/xscaler_service as everything else.
+# Its database client spans carry db.system.name, server.address and
+# server.port: the keys databases.yaml stamps on receiver metrics.
+
+receivers:
+  obi:
+    discovery:
+      instrument:
+        - open_ports: "80,443,3000,5000,8000,8080,8443,9090"
+    attributes:
+      kubernetes:
+        enable: "true"
+        cluster_name: "${env:XSCALER_CLUSTER_NAME}"
+    meter_provider:
+      features: [application, application_runtime]
+
+service:
+  pipelines:
+    metrics:
+      receivers: [kubelet_stats, otlp, obi]
+    traces:
+      receivers: [otlp, obi]

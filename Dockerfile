@@ -1,49 +1,99 @@
-# xscaler-agent: the OpAMP supervisor bundled with the OTel collector it manages.
+# syntax=docker/dockerfile:1.7
 #
-# The published opampsupervisor image ships the supervisor only (no collector
-# binary), so we graft a collector in. Two targets:
+# xscaler-collector: one OCB-built collector for every role, plus the OpAMP
+# supervisor that manages it.
 #
-#   default (LAST stage) — supervisor + prebuilt otel/opentelemetry-collector-contrib.
-#                          Cheap/fast build. `docker build .` selects this.
-#   ebpf                 — supervisor + an OCB-built collector that adds the OBI
-#                          (OpenTelemetry eBPF Instrumentation) receiver for
-#                          zero-code auto-instrumentation. Heavy build (clones
-#                          OBI, runs the Collector Builder). `--target ebpf`.
+# Every build stage runs on the build host's platform and cross-compiles with
+# GOOS/GOARCH, so a multi-arch image needs no QEMU and the same file produces
+# the Windows and macOS binaries:
 #
-# Both flavours ride the same OTEL_VERSION and differ only by the `obi` receiver.
-ARG OTEL_VERSION=0.151.0
-ARG OBI_VERSION=v0.9.0
+#   docker buildx build --platform linux/amd64,linux/arm64 .            # image
+#   docker buildx build --platform linux/arm64 --target binary -o dist .  # binaries
+#   docker buildx build --platform windows/amd64 --target binary -o dist .
+#
+# Versions default to versions.env; scripts/check-pins.sh keeps them in sync.
+ARG GO_VERSION=1.27
+ARG OBI_GENERATOR_VERSION=0.2.17
+ARG ALPINE_VERSION=3.22
 
-FROM ghcr.io/open-telemetry/obi-generator:0.2.12 AS obi-gen
-ARG OBI_VERSION
-RUN git clone --depth 1 --branch "${OBI_VERSION}" \
+# OBI's eBPF objects are not in its published Go module. Run OBI's own
+# `make generate` on the release tag; bpf2go emits objects for amd64 and arm64.
+FROM --platform=$BUILDPLATFORM ghcr.io/open-telemetry/obi-generator:${OBI_GENERATOR_VERSION} AS obi-gen
+ARG OBI_VERSION=0.15.2
+RUN git clone --depth 1 --branch "v${OBI_VERSION}" \
       https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation /src/obi
-# llvm-strip lives only in llvm20/bin here; append it so bpf2go finds it. No
-# `|| true` — a generate failure must fail the build.
-RUN cd /src/obi && PATH="$PATH:/usr/lib/llvm20/bin" make generate
+# llvm-strip lives only in the llvm bin dir; append it so bpf2go finds it.
+RUN cd /src/obi && PATH="$PATH:$(ls -d /usr/lib/llvm*/bin | tail -1)" make generate
 
-FROM golang:1.25-bookworm AS ocb-build
-ARG OTEL_VERSION
+# OCB generates the distribution's Go sources (no compile yet).
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS sources
+ARG OTEL_VERSION=0.163.0
+ARG VERSION=0.0.0-dev
 COPY --from=obi-gen /src/obi /src/obi
-COPY builder.yaml /build/builder.yaml
-RUN go run "go.opentelemetry.io/collector/cmd/builder@v${OTEL_VERSION}" \
-      --config /build/builder.yaml \
-    && test -x /build/otelcol-contrib
+WORKDIR /build
+COPY builder.yaml .
+RUN sed -i "s/^  version: .*/  version: ${VERSION}/" builder.yaml
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go run "go.opentelemetry.io/collector/cmd/builder@v${OTEL_VERSION}" \
+      --config builder.yaml --skip-compilation \
+ && cd _build && go mod download
 
-FROM otel/opentelemetry-collector-contrib:${OTEL_VERSION} AS contrib
+FROM sources AS collector
+ARG TARGETOS
+ARG TARGETARCH
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd _build \
+ && ext=""; [ "${TARGETOS}" = "windows" ] && ext=".exe"; \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -trimpath -ldflags="-s -w" -o "/out/xscaler-collector${ext}" .
 
-# ebpf target: supervisor base + the OCB-built collector (has `obi`).
-FROM ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-opampsupervisor:${OTEL_VERSION} AS ebpf
-ARG OTEL_VERSION
-ARG OBI_VERSION
-# The image is tagged with xscaler's own distro version; these labels record the
-# bundled upstream versions so `docker inspect` reveals what's inside.
-LABEL org.opentelemetry.collector.version="${OTEL_VERSION}" \
+# The supervisor's go.mod has local `replace` lines into the contrib tree, so
+# `go install ...@version` refuses it. Build from a sparse checkout of the tag.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS supervisor
+ARG OTEL_VERSION=0.163.0
+ARG TARGETOS
+ARG TARGETARCH
+RUN git clone --depth 1 --filter=blob:none --sparse \
+      --branch "cmd/opampsupervisor/v${OTEL_VERSION}" \
+      https://github.com/open-telemetry/opentelemetry-collector-contrib /src/contrib \
+ && cd /src/contrib \
+ && git sparse-checkout set cmd/opampsupervisor \
+ && git sparse-checkout add $(grep '=> \.\./\.\./' cmd/opampsupervisor/go.mod \
+      | awk '{print $NF}' | sed 's#^\.\./\.\./##' | sort -u)
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd /src/contrib/cmd/opampsupervisor \
+ && ext=""; [ "${TARGETOS}" = "windows" ] && ext=".exe"; \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -trimpath -ldflags="-s -w" -o "/out/opampsupervisor${ext}" .
+
+# `--target binary -o dist` exports both binaries for the requested platform.
+FROM scratch AS binary
+COPY --from=collector /out/ /
+COPY --from=supervisor /out/ /
+
+# Default target (LAST stage): the image every Kubernetes role runs.
+FROM alpine:${ALPINE_VERSION} AS image
+ARG VERSION=0.0.0-dev
+ARG OTEL_VERSION=0.163.0
+ARG OBI_VERSION=0.15.2
+LABEL org.opencontainers.image.title="xscaler-collector" \
+      org.opencontainers.image.source="https://github.com/xscaler/xscaler-agent" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opentelemetry.collector.version="${OTEL_VERSION}" \
       io.xscaler.obi.version="${OBI_VERSION}"
-COPY --from=ocb-build /build/otelcol-contrib /usr/local/bin/otelcol-contrib
-
-# default target (LAST stage): supervisor base + prebuilt contrib collector.
-FROM ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-opampsupervisor:${OTEL_VERSION} AS default
-ARG OTEL_VERSION
-LABEL org.opentelemetry.collector.version="${OTEL_VERSION}"
-COPY --from=contrib /otelcol-contrib /usr/local/bin/otelcol-contrib
+# Same user, uid and entrypoint as the upstream opampsupervisor image this
+# replaces, so the chart's securityContext and args work unchanged.
+RUN apk add --no-cache ca-certificates tzdata \
+ && addgroup -g 10001 -S opampsupervisor \
+ && adduser -u 10001 -S -G opampsupervisor -h /home/opampsupervisor -s /sbin/nologin opampsupervisor
+COPY --from=collector --chmod=755 /out/xscaler-collector /usr/local/bin/xscaler-collector
+COPY --from=supervisor --chmod=755 /out/opampsupervisor /usr/local/bin/opampsupervisor
+# Supervisor configs written for the old images exec otelcol-contrib.
+RUN ln -s xscaler-collector /usr/local/bin/otelcol-contrib
+USER opampsupervisor
+WORKDIR /home/opampsupervisor
+ENTRYPOINT ["opampsupervisor"]
