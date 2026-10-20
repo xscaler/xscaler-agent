@@ -73,15 +73,21 @@ wait_for "service active" systemctl is-active --quiet xscaler-collector.service
 main_pid=$(systemctl show -p MainPID --value xscaler-collector.service)
 [ "$(ps -o user= -p "$main_pid")" = xscaler-collector ] ||
   fail "supervisor runs as $(ps -o user= -p "$main_pid")"
-wait_for "collector process" collector_pid
-cpid=$(collector_pid)
-echo "supervisor pid $main_pid, collector pid $cpid"
-[ "$(ps -o ppid= -p "$cpid" | tr -d ' ')" = "$main_pid" ] || fail "collector is not the supervisor's child"
-for group in adm systemd-journal; do
-  gid=$(getent group "$group" | cut -d: -f3)
-  grep '^Groups:' "/proc/$cpid/status" | tr -s '\t ' '\n' | grep -qx "$gid" ||
-    fail "collector process is not in $group"
-done
+# The supervisor first runs the collector briefly to read its description,
+# then starts it for good, so retry until the running one passes.
+collector_ok() {
+  local pid gid
+  pid=$(collector_pid) || return 1
+  [ -n "$pid" ] || return 1
+  [ "$(ps -o ppid= -p "$pid" | tr -d ' ')" = "$main_pid" ] || return 1
+  for gid in "$adm_gid" "$journal_gid"; do
+    grep '^Groups:' "/proc/$pid/status" 2>/dev/null | tr -s '\t ' '\n' | grep -qx "$gid" || return 1
+  done
+}
+adm_gid=$(getent group adm | cut -d: -f3)
+journal_gid=$(getent group systemd-journal | cut -d: -f3)
+wait_for "collector running as the supervisor's child in adm and systemd-journal" collector_ok
+echo "supervisor pid $main_pid, collector pid $(collector_pid)"
 sleep 5
 systemctl is-active --quiet xscaler-collector.service || fail "service died"
 pgrep -u xscaler-collector -f '^/usr/bin/xscaler-collector' >/dev/null || fail "collector died"
@@ -93,7 +99,8 @@ cmp /tmp/env.edited "$env" || fail "upgrade replaced xscaler-collector.env"
 wait_for "service active after upgrade" systemctl is-active --quiet xscaler-collector.service
 new_pid=$(systemctl show -p MainPID --value xscaler-collector.service)
 [ "$new_pid" != "$main_pid" ] || fail "upgrade did not restart the service"
-wait_for "collector after upgrade" collector_pid
+main_pid=$new_pid
+wait_for "collector after upgrade" collector_ok
 
 step "eBPF drop-in"
 mkdir -p /etc/systemd/system/xscaler-collector.service.d
@@ -103,11 +110,15 @@ systemctl restart xscaler-collector.service
 wait_for "service active with eBPF" systemctl is-active --quiet xscaler-collector.service
 systemctl show -p AmbientCapabilities --value xscaler-collector.service | grep -q cap_bpf ||
   fail "AmbientCapabilities lacks cap_bpf"
-wait_for "collector with eBPF" collector_pid
-cpid=$(collector_pid)
-amb=$(awk '/^CapAmb:/{print $2}' "/proc/$cpid/status")
-echo "collector CapAmb=$amb"
-[ "$amb" != 0000000000000000 ] || fail "collector did not inherit the ambient capabilities"
+main_pid=$(systemctl show -p MainPID --value xscaler-collector.service)
+collector_has_caps() {
+  local pid
+  collector_ok || return 1
+  pid=$(collector_pid)
+  [ "$(awk '/^CapAmb:/{print $2}' "/proc/$pid/status" 2>/dev/null)" != 0000000000000000 ]
+}
+wait_for "collector with the ambient eBPF capabilities" collector_has_caps
+echo "collector CapAmb=$(awk '/^CapAmb:/{print $2}' "/proc/$(collector_pid)/status")"
 rm /etc/systemd/system/xscaler-collector.service.d/ebpf.conf
 systemctl daemon-reload
 
