@@ -12,7 +12,7 @@
 #   docker buildx build --platform windows/amd64 --target binary -o dist .
 #
 # Versions default to versions.env; scripts/check-pins.sh keeps them in sync.
-ARG GO_VERSION=1.27
+ARG GO_VERSION=1.27.3
 ARG OBI_GENERATOR_VERSION=0.2.17
 ARG ALPINE_VERSION=3.22
 
