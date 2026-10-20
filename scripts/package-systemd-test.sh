@@ -9,12 +9,14 @@
 # enable-without-start when there is no token, the service user and groups,
 # the supervisor launching the collector, an upgrade that keeps edited config
 # and restarts onto the new package, the eBPF drop-in, and purge.
-set -euo pipefail
+set -Eeuo pipefail
 
 old=$(realpath "$1")
 new=$(realpath "$2")
 
 fail() { echo "FAIL: $*" >&2; journalctl -u xscaler-collector --no-pager -n 50 >&2 || true; exit 1; }
+# A command that fails outside a check still says where.
+trap 'fail "line $LINENO: $BASH_COMMAND exited $?"' ERR
 step() { echo "--- $*"; }
 
 apt_install() {

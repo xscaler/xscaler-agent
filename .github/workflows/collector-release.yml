@@ -325,8 +325,19 @@ jobs:
         with:
           name: msi-old
           path: msi-old
-      - run: |
-          scripts/msi-test.ps1 -OldMsi (Get-Item msi-old/*.msi).FullName -NewMsi (Get-Item msi/*.msi).FullName
+      - name: Locate MSIs
+        run: |
+          "OLD_MSI=$((Get-Item msi-old/*.msi).FullName)" >> $env:GITHUB_ENV
+          "NEW_MSI=$((Get-Item msi/*.msi).FullName)" >> $env:GITHUB_ENV
+      - name: Install old MSI with token, service starts
+        timeout-minutes: 10
+        run: scripts/msi-test.ps1 -OldMsi $env:OLD_MSI -NewMsi $env:NEW_MSI -Phase install
+      - name: Upgrade keeps config, service restarts
+        timeout-minutes: 10
+        run: scripts/msi-test.ps1 -OldMsi $env:OLD_MSI -NewMsi $env:NEW_MSI -Phase upgrade
+      - name: Uninstall
+        timeout-minutes: 10
+        run: scripts/msi-test.ps1 -OldMsi $env:OLD_MSI -NewMsi $env:NEW_MSI -Phase uninstall
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
