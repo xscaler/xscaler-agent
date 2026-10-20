@@ -14,3 +14,6 @@ supervisor.yaml
 .DS_Store
 *.swp
 dist/
+
+# Generated sources exported by `--target sources-out` for release builds
+.build/

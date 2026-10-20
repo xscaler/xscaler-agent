@@ -51,10 +51,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # The supervisor's go.mod has local `replace` lines into the contrib tree, so
 # `go install ...@version` refuses it. Build from a sparse checkout of the tag.
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS supervisor
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS supervisor-src
 ARG OTEL_VERSION=0.163.0
-ARG TARGETOS
-ARG TARGETARCH
 RUN git clone --depth 1 --filter=blob:none --sparse \
       --branch "cmd/opampsupervisor/v${OTEL_VERSION}" \
       https://github.com/open-telemetry/opentelemetry-collector-contrib /src/contrib \
@@ -62,6 +60,10 @@ RUN git clone --depth 1 --filter=blob:none --sparse \
  && git sparse-checkout set cmd/opampsupervisor \
  && git sparse-checkout add $(grep '=> \.\./\.\./' cmd/opampsupervisor/go.mod \
       | awk '{print $NF}' | sed 's#^\.\./\.\./##' | sort -u)
+
+FROM supervisor-src AS supervisor
+ARG TARGETOS
+ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     cd /src/contrib/cmd/opampsupervisor \
@@ -73,6 +75,21 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM scratch AS binary
 COPY --from=collector /out/ /
 COPY --from=supervisor /out/ /
+
+# `--target sources-out -o .build` exports the generated trees GoReleaser
+# compiles in the release workflow: collector/ (OCB output, OBI replace made
+# relative), obi/ (the generated OBI tree) and contrib/ (the supervisor's
+# sparse checkout). Git metadata is dropped; nothing in the build reads it.
+FROM sources AS sources-export
+COPY --from=supervisor-src /src/contrib /out/contrib
+RUN cp -a /build/_build /out/collector \
+ && cp -a /src/obi /out/obi \
+ && rm -rf /out/obi/.git /out/contrib/.git \
+ && cd /out/collector \
+ && go mod edit -replace go.opentelemetry.io/obi=../obi
+
+FROM scratch AS sources-out
+COPY --from=sources-export /out/ /
 
 # Default target (LAST stage): the image every Kubernetes role runs.
 FROM alpine:${ALPINE_VERSION} AS image

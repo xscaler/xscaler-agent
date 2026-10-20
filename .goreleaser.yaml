@@ -1,0 +1,148 @@
+# GoReleaser (OSS) config for the xscaler-collector release artifacts:
+# binaries, tar.gz/zip archives and the deb/rpm packages.
+#
+# It compiles trees the Dockerfile generates, so export them first:
+#
+#   docker buildx build --target sources-out -o .build .
+#   goreleaser release --snapshot --clean
+#
+# .github/workflows/collector-release.yml does the same on a v* tag, then
+# builds the MSI, checksums, signs and publishes. GoReleaser itself publishes
+# nothing (release.disable), so the checksums cover the MSI too.
+version: 2
+
+project_name: xscaler-collector
+
+dist: dist
+
+builds:
+  - id: collector
+    dir: .build/collector
+    binary: xscaler-collector
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos: [linux, windows, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: supervisor
+    dir: .build/contrib/cmd/opampsupervisor
+    binary: xscaler-supervisor
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos: [linux, windows, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: archives
+    ids: [collector, supervisor]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    files:
+      - LICENSE
+      - NOTICE
+      - src: packaging/archive/README.txt
+        dst: README.txt
+      - src: packaging/archive/supervisor.yaml
+        dst: config/supervisor.yaml
+
+nfpms:
+  - id: packages
+    package_name: xscaler-collector
+    ids: [collector, supervisor]
+    formats: [deb, rpm]
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: xScaler
+    homepage: https://github.com/xscaler/xscaler-agent
+    maintainer: xScaler <support@xscalerlabs.com>
+    description: |-
+      xScaler Collector
+      The xScaler OpenTelemetry Collector distribution, run by the OpAMP
+      supervisor, which enrolls with xScaler and applies the configuration
+      assigned to the agent.
+    license: Apache-2.0
+    mtime: "{{ .CommitDate }}"
+    section: admin
+    priority: optional
+    bindir: /usr/bin
+    contents:
+      - src: packaging/linux/xscaler-collector.service
+        dst: /usr/lib/systemd/system/xscaler-collector.service
+        file_info:
+          mode: 0644
+      - src: packaging/linux/ebpf.conf
+        dst: /usr/share/xscaler-collector/ebpf.conf
+        file_info:
+          mode: 0644
+      - dst: /etc/xscaler-collector
+        type: dir
+        file_info:
+          mode: 0750
+      - src: packaging/linux/supervisor.yaml
+        dst: /etc/xscaler-collector/supervisor.yaml
+        type: config|noreplace
+        file_info:
+          mode: 0640
+      - src: packaging/linux/xscaler-collector.env
+        dst: /etc/xscaler-collector/xscaler-collector.env
+        type: config|noreplace
+        file_info:
+          mode: 0640
+      - dst: /var/lib/xscaler-collector
+        type: dir
+        file_info:
+          mode: 0750
+      - src: LICENSE
+        dst: /usr/share/doc/xscaler-collector/LICENSE
+        file_info:
+          mode: 0644
+      - src: NOTICE
+        dst: /usr/share/doc/xscaler-collector/NOTICE
+        file_info:
+          mode: 0644
+    scripts:
+      preinstall: packaging/linux/preinstall.sh
+      postinstall: packaging/linux/postinstall.sh
+      preremove: packaging/linux/preremove.sh
+      postremove: packaging/linux/postremove.sh
+    deb:
+      # useradd, groupadd, usermod run in preinst.
+      predepends: [passwd]
+    rpm:
+      group: System Environment/Daemons
+      # Signed when the release workflow provides the package repo key; yum
+      # verifies it with gpgcheck=1.
+      signature:
+        key_file: '{{ if index .Env "NFPM_GPG_KEY_FILE" }}{{ .Env.NFPM_GPG_KEY_FILE }}{{ end }}'
+    overrides:
+      rpm:
+        dependencies:
+          - shadow-utils
+
+checksum:
+  disable: true
+
+changelog:
+  disable: true
+
+release:
+  disable: true
+
+snapshot:
+  # UPGRADE_FROM_VERSION stamps a lower version on the same build; the
+  # install tests upgrade from it to the real packages.
+  version_template: >-
+    {{ if index .Env "UPGRADE_FROM_VERSION" }}{{ .Env.UPGRADE_FROM_VERSION }}{{ else }}{{ incpatch .Version }}-dev.{{ .ShortCommit }}{{ end }}
