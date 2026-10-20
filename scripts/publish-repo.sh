@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Add deb and rpm packages to the apt and yum repositories in a local tree
-# that mirrors the packages.xscaler.io bucket:
+# that mirrors the packages.xscalerlabs.com bucket:
 #
 #   apt/dists, apt/pool          apt repository (reprepro), public
 #   rpm/<channel>/Packages       rpms, public
@@ -29,7 +29,7 @@ channel=$1
 pkgdir=$(cd "$2" && pwd)
 root=$3
 : "${GPG_KEY_ID:?set GPG_KEY_ID to the signing key fingerprint}"
-base_url=${BASE_URL:-https://packages.xscaler.io}
+base_url=${BASE_URL:-https://packages.xscalerlabs.com}
 
 case "$channel" in
   stable | testing) ;;

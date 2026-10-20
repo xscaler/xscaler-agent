@@ -1,7 +1,7 @@
 name: collector-release
 # Release artifacts for xscaler-collector: binaries, tar.gz/zip archives,
 # deb/rpm packages and MSIs, with checksums, cosign signatures, SBOMs and
-# build provenance, then the apt/yum repository at packages.xscaler.io.
+# build provenance, then the apt/yum repository at packages.xscalerlabs.com.
 #
 # A v* tag publishes. release.yml calls this workflow with the tag it creates
 # (a tag pushed with GITHUB_TOKEN starts no workflow on its own). A tag with a
@@ -398,7 +398,7 @@ jobs:
           fi
 
   repo:
-    # Add the packages to packages.xscaler.io. One run at a time: each run
+    # Add the packages to packages.xscalerlabs.com. One run at a time: each run
     # reads and rewrites the repository indexes.
     needs: [meta, publish]
     runs-on: ubuntu-24.04
@@ -412,7 +412,7 @@ jobs:
     env:
       CHANNEL: ${{ needs.meta.outputs.channel }}
       BUCKET: ${{ vars.PACKAGES_BUCKET }}
-      BASE_URL: ${{ vars.PACKAGES_BASE_URL || 'https://packages.xscaler.io' }}
+      BASE_URL: ${{ vars.PACKAGES_BASE_URL || 'https://packages.xscalerlabs.com' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -480,7 +480,7 @@ jobs:
       matrix:
         image: ["debian:12", "ubuntu:24.04", "rockylinux:9", "amazonlinux:2023"]
     env:
-      BASE_URL: ${{ vars.PACKAGES_BASE_URL || 'https://packages.xscaler.io' }}
+      BASE_URL: ${{ vars.PACKAGES_BASE_URL || 'https://packages.xscalerlabs.com' }}
       CHANNEL: ${{ needs.meta.outputs.channel }}
       VERSION: ${{ needs.build.outputs.version }}
     steps:

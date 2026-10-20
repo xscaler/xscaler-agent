@@ -7,7 +7,7 @@ xscaler-supervisor   the OpenTelemetry OpAMP supervisor that enrolls with
                      assigned to this agent
 
 On Linux, prefer the deb/rpm packages (apt/yum repository at
-https://packages.xscaler.io) and on Windows the MSI: both install a service.
+https://packages.xscalerlabs.com) and on Windows the MSI: both install a service.
 
 To run from this archive, put your enrollment token in the environment and
 start the supervisor from this directory:

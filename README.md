@@ -311,9 +311,9 @@ built from the same sources as the image
 Debian and Ubuntu:
 
 ```sh
-curl -fsSL https://packages.xscaler.io/xscaler-archive-keyring.gpg \
+curl -fsSL https://packages.xscalerlabs.com/xscaler-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/xscaler-archive-keyring.gpg >/dev/null
-echo "deb [signed-by=/usr/share/keyrings/xscaler-archive-keyring.gpg] https://packages.xscaler.io/apt stable main" \
+echo "deb [signed-by=/usr/share/keyrings/xscaler-archive-keyring.gpg] https://packages.xscalerlabs.com/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/xscaler.list
 sudo apt-get update && sudo apt-get install xscaler-collector
 ```
@@ -321,7 +321,7 @@ sudo apt-get update && sudo apt-get install xscaler-collector
 RHEL, Rocky, Amazon Linux and other dnf/yum hosts:
 
 ```sh
-sudo curl -fsSL https://packages.xscaler.io/rpm/xscaler.repo -o /etc/yum.repos.d/xscaler.repo
+sudo curl -fsSL https://packages.xscalerlabs.com/rpm/xscaler.repo -o /etc/yum.repos.d/xscaler.repo
 sudo dnf install xscaler-collector
 ```
 
