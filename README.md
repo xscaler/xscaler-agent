@@ -301,31 +301,85 @@ restart, and no ghost is created. There's no namespace/salt to configure:
 otherwise two clusters left at the default would derive colliding UIDs. See
 `charts/xscaler-agent/values.yaml`.
 
-### Host binary via systemd
+### Hosts: packages and MSI
 
-For host/VM fleets, run the supervisor as a service. Extract the two binaries
-from the image (or install them however you distribute host binaries), drop a
-supervisor config at `/etc/xscaler/supervisor.yaml`, and run:
+Each release publishes `xscaler-collector` as deb and rpm packages, Windows
+MSIs and tar.gz/zip archives for linux, windows and darwin on amd64 and arm64,
+built from the same sources as the image
+([`collector-release.yml`](.github/workflows/collector-release.yml)).
 
-```ini
-# /etc/systemd/system/xscaler-agent.service
-[Unit]
-Description=xscaler telemetry agent (OpAMP supervisor)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/opampsupervisor --config /etc/xscaler/supervisor.yaml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
+Debian and Ubuntu:
 
 ```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now xscaler-agent
+curl -fsSL https://packages.xscaler.io/xscaler-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/xscaler-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/xscaler-archive-keyring.gpg] https://packages.xscaler.io/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/xscaler.list
+sudo apt-get update && sudo apt-get install xscaler-collector
+```
+
+RHEL, Rocky, Amazon Linux and other dnf/yum hosts:
+
+```sh
+sudo curl -fsSL https://packages.xscaler.io/rpm/xscaler.repo -o /etc/yum.repos.d/xscaler.repo
+sudo dnf install xscaler-collector
+```
+
+Release candidates go to the `testing` channel (`.../apt testing main`, or
+`dnf --enablerepo xscaler-testing`). The apt index lists the newest version
+per channel; the yum index lists every version.
+
+The package installs:
+
+| Path | |
+| --- | --- |
+| `/usr/bin/xscaler-collector`, `/usr/bin/xscaler-supervisor` | the collector and the OpAMP supervisor |
+| `xscaler-collector.service` | runs the supervisor as user `xscaler-collector`, in groups `adm` (`/var/log`) and `systemd-journal` |
+| `/etc/xscaler-collector/xscaler-collector.env` | `XSCALER_ENROLLMENT_TOKEN`, `XSCALER_ENDPOINT`, `XSCALER_AGENT_NAME` |
+| `/etc/xscaler-collector/supervisor.yaml` | supervisor config; add labels here |
+| `/var/lib/xscaler-collector` | supervisor and collector state |
+| `/usr/share/xscaler-collector/ebpf.conf` | systemd drop-in granting the eBPF capabilities, off by default |
+
+Both config files are kept on upgrade. The service is enabled on install and
+starts once the env file has a token:
+
+```sh
+sudo sed -i 's/^XSCALER_ENROLLMENT_TOKEN=.*/XSCALER_ENROLLMENT_TOKEN=xse_.../' \
+  /etc/xscaler-collector/xscaler-collector.env
+sudo systemctl restart xscaler-collector
+```
+
+Installing the package stops and disables `otelcol-contrib.service` and the
+`opampsupervisor.service` written by `get-xscaler/install.sh`, so a host never
+runs two agents. eBPF instrumentation: link the drop-in as described at the
+top of `ebpf.conf`.
+
+Windows, silent install (service `xscaler-collector`, binaries in
+`C:\Program Files\xScaler Collector`):
+
+```powershell
+msiexec /i xscaler-collector_<version>_windows_amd64.msi /qn ENROLLMENT_TOKEN=xse_... [ENDPOINT=wss://...]
+```
+
+The config is written to `%ProgramData%\xScaler Collector\supervisor.yaml`
+(SYSTEM and Administrators only). Upgrades keep it, and passing
+`ENROLLMENT_TOKEN` or `ENDPOINT` again changes only those values. Uninstall
+leaves it in place.
+
+#### Verifying a download
+
+Each release has `xscaler-collector_<version>_checksums.txt`, a cosign keyless
+signature bundle for it, an SPDX SBOM per artifact (`<artifact>.spdx.json`)
+and GitHub build provenance:
+
+```sh
+cosign verify-blob \
+  --bundle xscaler-collector_<version>_checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/xscaler/xscaler-agent/\.github/workflows/collector-release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  xscaler-collector_<version>_checksums.txt
+sha256sum --check --ignore-missing xscaler-collector_<version>_checksums.txt
+gh attestation verify xscaler-collector_<version>_amd64.deb --repo xscaler/xscaler-agent
 ```
 
 ## kube-state-metrics (optional subchart)
@@ -438,7 +492,21 @@ To cut a release, bump `version` in `Chart.yaml` in a PR and merge to `main`.
    `linux/arm64` and pushes them as `xscaler-collector:<version>` and
    `:latest`, and `xscaler-agent:<version>`, `:<version>-ebpf` and `:latest`;
 3. packages the Helm chart with `version` and `appVersion` set to `<version>`
-   and pushes it to `oci://ghcr.io/xscaler/charts`.
+   and pushes it to `oci://ghcr.io/xscaler/charts`;
+4. runs [`collector-release.yml`](.github/workflows/collector-release.yml) for
+   the tag: binaries, archives, deb/rpm, MSIs, install tests on every target
+   distro and on windows-2022, checksums, cosign signature, SBOMs and
+   provenance on the GitHub release, then the apt/yum repository.
+
+Pushing a `v*` tag by hand runs step 4 alone; a prerelease tag
+(`v0.6.0-rc.1`) publishes to the `testing` channel. Every pull request that
+touches packaging runs step 4 as a snapshot, without publishing.
+
+Step 4 needs the `PACKAGES_GPG_PRIVATE_KEY` and `PACKAGES_GPG_PASSPHRASE`
+secrets (the repository and rpm signing key), and the `PACKAGES_BUCKET`,
+`PACKAGES_CLOUDFRONT_ID` and `PACKAGES_AWS_ROLE_ARN` variables from
+terraform-aws `envs/ops/packages`. The repository job runs in the `packages`
+environment, the only one the role trusts.
 
 So one number in `Chart.yaml` drives the git tag, both image tags, and the chart
 version/appVersion in lockstep, and is stamped into `xscaler-collector
