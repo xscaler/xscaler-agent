@@ -4,6 +4,7 @@ on:
     paths:
       - "Dockerfile"
       - "builder.yaml"
+      - "processor/**"
       - ".github/workflows/image-ci.yml"
 
 permissions:
