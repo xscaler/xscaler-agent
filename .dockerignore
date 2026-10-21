@@ -1,5 +1,7 @@
-# The build only needs the Dockerfile and builder.yaml. Keep everything else
-# out of the build context so the eBPF build (which is already heavy) stays lean.
+# The build only needs the Dockerfile, builder.yaml and our own components.
+# Keep everything else out of the build context so the OCB build stays lean.
 *
 !Dockerfile
 !builder.yaml
+!processor/
+processor/**/*_test.go

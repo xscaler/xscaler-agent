@@ -18,27 +18,29 @@ opampsupervisor, and OBI. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
 
 ## Build targets
 
-The [`Dockerfile`](Dockerfile) has two flavours that ride the same
-`OTEL_VERSION` and differ **only** by the `obi` eBPF receiver:
+The [`Dockerfile`](Dockerfile) builds **one** collector distribution with the
+[OpenTelemetry Collector
+Builder](https://opentelemetry.io/docs/collector/custom-collector/) from
+[`builder.yaml`](builder.yaml): the contrib components our starter configs,
+Helm chart, Ansible roles and portal templates use, the `obi` eBPF receiver,
+and our own [`xscaler_policy`](processor/xscalerpolicyprocessor/README.md)
+processor. Both targets ship the same binary:
 
-| Flavour | Build | Collector | `obi` receiver? |
-| --- | --- | --- | --- |
-| **default** | `docker build .` | prebuilt `otel/opentelemetry-collector-contrib`, grafted in | no |
-| **ebpf** | `docker build --target ebpf .` | custom OCB build incl. `obi` | yes |
+| Target | Build | Notes |
+| --- | --- | --- |
+| **default** | `docker build .` | |
+| **ebpf** | `docker build --target ebpf .` | Same binary; kept so the chart's `-ebpf` tag resolves |
 
-The `default` flavour is fast — the OCB compile lives only in the `ebpf` target's
-dependency graph, so a plain `docker build` never pays for it. The `ebpf`
-flavour needs a custom [OpenTelemetry Collector
-Builder](https://opentelemetry.io/docs/collector/custom-collector/) build
-because the prebuilt contrib binary doesn't ship `obi`; that build clones OBI
-and runs a Go + BPF toolchain, so it is slow.
+The build clones OBI and runs a Go + BPF toolchain, so it is slow. A component
+missing from `builder.yaml` fails any config that names it: add it there before
+a template starts using it.
 
 ### Version pins
 
 Both flavours are pinned via build args in the `Dockerfile`:
 
 - `OTEL_VERSION` (`0.151.0`) — fleet-wide collector/supervisor release.
-- `OBI_VERSION` (`v0.9.0`) — OBI module tag **and** source-checkout tag (`ebpf` only).
+- `OBI_VERSION` (`v0.9.0`) — OBI module tag **and** source-checkout tag.
 
 `OTEL_VERSION` is pinned to the release OBI `v0.9.0` is built against (contrib
 `v0.151.0` / core `v1.57.0`): OBI can't be mixed into an older core, so it sets
@@ -51,8 +53,8 @@ Published to GitHub Container Registry (public, multi-arch `linux/amd64` +
 `linux/arm64`):
 
 ```
-ghcr.io/xscaler/xscaler-agent:<version>          # default flavour
-ghcr.io/xscaler/xscaler-agent:<version>-ebpf     # eBPF flavour
+ghcr.io/xscaler/xscaler-agent:<version>          # default target
+ghcr.io/xscaler/xscaler-agent:<version>-ebpf     # same binary, eBPF tag
 ghcr.io/xscaler/xscaler-agent:latest             # latest default
 ```
 
