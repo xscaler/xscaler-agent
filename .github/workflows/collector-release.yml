@@ -457,7 +457,9 @@ jobs:
       - name: Pull repository state
         run: |
           aws s3 sync --only-show-errors "s3://$BUCKET/state" root/state
-          aws s3 sync --only-show-errors "s3://$BUCKET/rpm/$CHANNEL/repodata" "root/rpm/$CHANNEL/repodata"
+          for ch in stable testing; do
+            aws s3 sync --only-show-errors "s3://$BUCKET/rpm/$ch/repodata" "root/rpm/$ch/repodata"
+          done
       - name: Add packages
         env:
           GPG_KEY_ID: ${{ steps.gpg.outputs.fingerprint }}
@@ -471,17 +473,23 @@ jobs:
           short="public, max-age=60"
           s3 sync root/apt/pool "s3://$BUCKET/apt/pool" --cache-control "$long"
           s3 sync "root/rpm/$CHANNEL/Packages" "s3://$BUCKET/rpm/$CHANNEL/Packages" --cache-control "$long"
-          s3 sync "root/apt/dists/$CHANNEL" "s3://$BUCKET/apt/dists/$CHANNEL" \
-            --exclude 'InRelease' --exclude 'Release' --exclude 'Release.gpg' --cache-control "$short"
-          s3 sync "root/rpm/$CHANNEL/repodata" "s3://$BUCKET/rpm/$CHANNEL/repodata" \
-            --exclude 'repomd.xml*' --cache-control "$short"
-          for f in InRelease Release Release.gpg; do
-            s3 cp "root/apt/dists/$CHANNEL/$f" "s3://$BUCKET/apt/dists/$CHANNEL/$f" --cache-control "$short"
+          # Both channels: a publish to one also creates the other's empty,
+          # signed indexes the first time.
+          for ch in stable testing; do
+            s3 sync "root/apt/dists/$ch" "s3://$BUCKET/apt/dists/$ch" \
+              --exclude 'InRelease' --exclude 'Release' --exclude 'Release.gpg' --cache-control "$short"
+            s3 sync "root/rpm/$ch/repodata" "s3://$BUCKET/rpm/$ch/repodata" \
+              --exclude 'repomd.xml*' --cache-control "$short"
           done
-          s3 cp "root/rpm/$CHANNEL/repodata/repomd.xml" "s3://$BUCKET/rpm/$CHANNEL/repodata/repomd.xml" --cache-control "$short"
-          s3 cp "root/rpm/$CHANNEL/repodata/repomd.xml.asc" "s3://$BUCKET/rpm/$CHANNEL/repodata/repomd.xml.asc" --cache-control "$short"
-          # Superseded yum metadata files (their names carry a checksum).
-          s3 sync "root/rpm/$CHANNEL/repodata" "s3://$BUCKET/rpm/$CHANNEL/repodata" --delete --cache-control "$short"
+          for ch in stable testing; do
+            for f in InRelease Release Release.gpg; do
+              s3 cp "root/apt/dists/$ch/$f" "s3://$BUCKET/apt/dists/$ch/$f" --cache-control "$short"
+            done
+            s3 cp "root/rpm/$ch/repodata/repomd.xml" "s3://$BUCKET/rpm/$ch/repodata/repomd.xml" --cache-control "$short"
+            s3 cp "root/rpm/$ch/repodata/repomd.xml.asc" "s3://$BUCKET/rpm/$ch/repodata/repomd.xml.asc" --cache-control "$short"
+            # Superseded yum metadata files (their names carry a checksum).
+            s3 sync "root/rpm/$ch/repodata" "s3://$BUCKET/rpm/$ch/repodata" --delete --cache-control "$short"
+          done
           for f in gpg.key xscaler-archive-keyring.gpg rpm/xscaler.repo; do
             s3 cp "root/$f" "s3://$BUCKET/$f" --cache-control "$short"
           done
@@ -489,7 +497,7 @@ jobs:
       - name: Invalidate CloudFront
         run: |
           aws cloudfront create-invalidation --distribution-id "${{ vars.PACKAGES_CLOUDFRONT_ID }}" \
-            --paths "/apt/dists/$CHANNEL/*" "/rpm/$CHANNEL/repodata/*" /gpg.key /xscaler-archive-keyring.gpg /rpm/xscaler.repo \
+            --paths "/apt/dists/*" "/rpm/stable/repodata/*" "/rpm/testing/repodata/*" /gpg.key /xscaler-archive-keyring.gpg /rpm/xscaler.repo \
             --query Invalidation.Id --output text
 
   repo-test:

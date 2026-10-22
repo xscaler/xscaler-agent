@@ -83,8 +83,9 @@ for deb in "$pkgdir"/*.deb; do
   echo "apt: adding $name $version $arch to $channel"
   repre includedeb "$channel" "$deb"
 done
-# Re-export so a run that only skipped still leaves signed indexes behind.
-repre export "$channel"
+# Export every channel, so both have signed (possibly empty) indexes and a
+# client configured for either one never finds a missing Release file.
+repre export
 
 # --- yum -------------------------------------------------------------------
 rpmdir=$root/rpm/$channel
@@ -120,6 +121,18 @@ else
 fi
 gpg --batch --yes --local-user "$GPG_KEY_ID" --detach-sign --armor \
   --output "$rpmdir/repodata/repomd.xml.asc" "$rpmdir/repodata/repomd.xml"
+
+# The other channel needs metadata too: xscaler.repo enables stable by
+# default, and dnf refuses every install while an enabled repo has no
+# repomd.xml. Create it empty the first time.
+for other in stable testing; do
+  dir=$root/rpm/$other
+  [ -f "$dir/repodata/repomd.xml" ] && continue
+  mkdir -p "$dir/Packages"
+  createrepo_c --quiet --general-compress-type gz "$dir"
+  gpg --batch --yes --local-user "$GPG_KEY_ID" --detach-sign --armor \
+    --output "$dir/repodata/repomd.xml.asc" "$dir/repodata/repomd.xml"
+done
 
 cat >"$root/rpm/xscaler.repo" <<EOF
 [xscaler]
