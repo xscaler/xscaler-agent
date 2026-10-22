@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  xScaler Collector MSI (WiX v5). Built by collector-release.yml:
+
+    wix build packaging/windows/xscaler-collector.wxs -arch x64 \
+      -ext WixToolset.Util.wixext \
+      -d Version=1.2.3 -d BinDir=dist/windows_amd64 -o xscaler-collector.msi
+
+  Silent install with enrollment:
+
+    msiexec /i xscaler-collector.msi /qn ENROLLMENT_TOKEN=xse_... [ENDPOINT=wss://...]
+
+  The supervisor config lives in %ProgramData%\xScaler Collector and is not an
+  MSI-owned file: configure.ps1 writes it on first install and only changes
+  the token or endpoint when those properties are passed, so upgrades and
+  repairs keep it and uninstall leaves it behind.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="xScaler Collector"
+           Manufacturer="xScaler"
+           Version="$(Version)"
+           UpgradeCode="6F0C2A0E-5E64-4C1B-9B0B-2B8E3A6B7C10"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="xScaler OpenTelemetry Collector and OpAMP supervisor" />
+
+    <!-- Remove the old product first, then install this one. A release
+         candidate and its final release share an MSI version, hence
+         AllowSameVersionUpgrades. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/xscaler/xscaler-agent" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Public properties for silent installs. Hidden keeps the token out of
+         the MSI log. -->
+    <Property Id="ENROLLMENT_TOKEN" Hidden="yes" Secure="yes" />
+    <Property Id="ENDPOINT" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="xScaler Collector" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="CollectorFiles" Directory="INSTALLFOLDER">
+      <Component Id="Collector">
+        <File Id="CollectorExe" Source="$(BinDir)\xscaler-collector.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="Supervisor">
+        <File Id="SupervisorExe" Source="$(BinDir)\xscaler-supervisor.exe" KeyPath="yes" />
+        <ServiceInstall Id="SupervisorService"
+                        Name="xscaler-collector"
+                        DisplayName="xScaler Collector"
+                        Description="xScaler OpenTelemetry Collector, run by the OpAMP supervisor"
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Arguments="--config &quot;[CommonAppDataFolder]xScaler Collector\supervisor.yaml&quot;"
+                        Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="5"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <!-- configure.ps1 starts the service once a token is configured, so
+             an install without ENROLLMENT_TOKEN still succeeds. -->
+        <ServiceControl Id="SupervisorServiceControl"
+                        Name="xscaler-collector"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+        <!-- The supervisor logs to the Application event log under its
+             service name when it runs as a service. -->
+        <util:EventSource Name="xscaler-collector"
+                          Log="Application"
+                          EventMessageFile="%SystemRoot%\System32\EventCreate.exe"
+                          SupportsErrors="yes"
+                          SupportsWarnings="yes"
+                          SupportsInformationals="yes" />
+      </Component>
+
+      <Component Id="ConfigureScript">
+        <File Id="ConfigurePs1" Source="$(sys.SOURCEFILEDIR)configure.ps1" KeyPath="yes" />
+      </Component>
+      <Component Id="SupervisorTemplate">
+        <File Id="SupervisorTemplateYaml" Source="$(sys.SOURCEFILEDIR)supervisor.yaml.tmpl" KeyPath="yes" />
+      </Component>
+      <Component Id="License">
+        <File Id="LicenseTxt" Source="$(sys.SOURCEFILEDIR)..\..\LICENSE" Name="LICENSE.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="Notice">
+        <File Id="NoticeTxt" Source="$(sys.SOURCEFILEDIR)..\..\NOTICE" Name="NOTICE.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="xScaler Collector" Level="1">
+      <ComponentGroupRef Id="CollectorFiles" />
+    </Feature>
+
+    <!-- configure.ps1 writes or updates supervisor.yaml and starts the
+         service. Token and endpoint go on its command line only when set. -->
+    <SetProperty Id="CfgTokenArg" Value=" -Token &quot;[ENROLLMENT_TOKEN]&quot;"
+                 Condition="ENROLLMENT_TOKEN" Before="SetConfigureCollector" Sequence="execute" />
+    <SetProperty Id="CfgEndpointArg" Value=" -Endpoint &quot;[ENDPOINT]&quot;"
+                 Condition="ENDPOINT" Before="SetConfigureCollector" Sequence="execute" />
+    <SetProperty Id="ConfigureCollector"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[#ConfigurePs1]&quot;[CfgTokenArg][CfgEndpointArg]"
+                 Before="ConfigureCollector" Sequence="execute" />
+    <Property Id="CfgTokenArg" Hidden="yes" />
+    <Property Id="ConfigureCollector" Hidden="yes" />
+
+    <CustomAction Id="ConfigureCollector"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="no"
+                  HideTarget="yes"
+                  Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom Action="ConfigureCollector" After="StartServices"
+              Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

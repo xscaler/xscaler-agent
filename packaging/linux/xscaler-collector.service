@@ -1,0 +1,30 @@
+# xscaler-collector: the OpAMP supervisor, which runs xscaler-collector with
+# the configuration xScaler assigns to this agent.
+#
+# Local overrides go in a drop-in (`systemctl edit xscaler-collector`), not in
+# this file: package upgrades replace it.
+[Unit]
+Description=xScaler Collector
+Documentation=https://github.com/xscaler/xscaler-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xscaler-collector
+Group=xscaler-collector
+EnvironmentFile=-/etc/xscaler-collector/xscaler-collector.env
+ExecStart=/usr/bin/xscaler-supervisor --config /etc/xscaler-collector/supervisor.yaml
+WorkingDirectory=/var/lib/xscaler-collector
+# systemd creates /var/lib/xscaler-collector owned by the service user.
+StateDirectory=xscaler-collector
+StateDirectoryMode=0750
+# The supervisor stops the collector it spawned; give it time to drain.
+KillMode=mixed
+TimeoutStopSec=60
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

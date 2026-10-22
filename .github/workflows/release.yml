@@ -241,3 +241,17 @@ jobs:
             --app-version "${version}" \
             --destination dist
           helm push "dist/xscaler-agent-${version}.tgz" "${CHART_REGISTRY}"
+
+  collector:
+    # Binaries, packages, MSIs and the apt/yum repository for the same tag.
+    # A tag pushed with GITHUB_TOKEN starts no workflow, so call it here.
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/collector-release.yml
+    with:
+      tag: v${{ needs.version.outputs.version }}
+    secrets: inherit
