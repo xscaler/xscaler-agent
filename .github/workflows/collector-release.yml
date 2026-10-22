@@ -8,11 +8,21 @@ name: collector-release
 # prerelease suffix (v0.6.0-rc.1) goes to the `testing` repository channel and
 # a GitHub prerelease; any other tag to `stable`.
 #
-# Pull requests and manual runs build snapshots and run every install test,
-# and publish nothing.
+# Pull requests, pushes to main and manual runs build snapshots and run every
+# install test, and publish nothing. The main runs also save the Go build
+# cache under main, the one ref tag runs can restore it from; without it a
+# tag compiles all twelve binaries cold (about 45 minutes).
 on:
   push:
     tags: ["v*"]
+    branches: [main]
+    paths:
+      - ".goreleaser.yaml"
+      - "Dockerfile"
+      - "builder.yaml"
+      - "versions.env"
+      - "packaging/**"
+      - ".github/workflows/collector-release.yml"
   workflow_call:
     inputs:
       tag:
@@ -376,7 +386,7 @@ jobs:
               *.tar.gz) tar -C "$d" -xzf "$f" ;;
               *.zip) unzip -q "$f" -d "$d" ;;
               *.deb) dpkg-deb -x "$f" "$d" ;;
-              *.rpm) (cd "$d" && rpm2cpio "$OLDPWD/$f" | cpio -idm --quiet) ;;
+              *.rpm) (cd "$d" && rpm2cpio "$OLDPWD/$f" | cpio -idm --quiet --no-absolute-filenames) ;;
               *.msi) unzip -q "${f%.msi}.zip" -d "$d" ;;
               *) continue ;;
             esac
