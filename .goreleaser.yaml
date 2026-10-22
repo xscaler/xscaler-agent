@@ -64,7 +64,11 @@ nfpms:
     package_name: xscaler-collector
     ids: [collector, supervisor]
     formats: [deb, rpm]
-    file_name_template: "{{ .ConventionalFileName }}"
+    # The package version keeps "~" (0.5.1~rc.2 sorts below 0.5.1), but GitHub
+    # renames release assets with "~" to ".", which would break
+    # `sha256sum --check` against the checksums file. Keep it out of the name.
+    file_name_template: '{{ replace .ConventionalFileName "~" "-" }}'
+
     vendor: xScaler
     homepage: https://github.com/xscaler/xscaler-agent
     maintainer: xScaler <support@xscalerlabs.com>
