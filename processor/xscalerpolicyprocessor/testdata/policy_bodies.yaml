@@ -1,0 +1,350 @@
+# Decode contract for xscaler_policy bodies.
+#
+# Each case is a policy body exactly as the portal stores it: the YAML that
+# agent-api writes under `processors: xscaler_policy:` in the policy layer.
+# decode_test.go (TestPolicyBodyDecodeContract) loads every body the way
+# the collector does (confmap resolver with ${...} expansion, env as the
+# default scheme; otelcol's unmarshal into the default config, which
+# rejects unknown keys and does no weak type conversion; then
+# Config.Validate) and checks the outcome below.
+#
+# Fields:
+#   name    unique case id
+#   body    the policy body (YAML)
+#   accept  true if the collector loads it, false if it fails to start
+#   error   (reject only) substring of the collector's error
+#   expect  (accept only) decoded values, by config path, as strings
+#   portal  "reject" where the portal must be stricter than the collector
+#           (the collector accepts, but the result is not what the author
+#           wrote); otherwise the portal must decide exactly like `accept`
+#   note    why the case is here
+#
+# Rule of thumb for the portal mirror: a body the collector rejects must
+# never be pushed, because the collector then refuses the whole config.
+cases:
+  # ---- shape ---------------------------------------------------------
+  - name: empty
+    accept: true
+    body: ""
+    note: an empty body applies the defaults and passes data through
+  - name: full_example
+    accept: true
+    body: |
+      policy_version: "2026-10-20T10:00:00Z"
+      drops:
+        - metric: "k8s_pod_filesystem_*"
+        - metric: "regex:go_gc_.*|go_memstats_.*"
+      aggregations:
+        - metric: "http_server_request_duration*"
+          drop_attributes: [k8s.pod.name, k8s.pod.uid]
+        - metric: "k8s_pod_memory_working_set"
+          drop_attributes: [k8s.pod.name]
+          gauge_function: sum
+      aggregation_state: {ttl: 10m, warmup: 2m, gauge_staleness: 5m, max_sources: 100000}
+      cardinality:
+        default_max_series: 0
+        window: 1h
+        limits:
+          - {metric: "regex:db_query_.*", max_series: 2000}
+      service_identity: {enabled: true}
+      collector_identity: {attribute: xscaler.collector.id}
+    expect:
+      policy_version: "2026-10-20T10:00:00Z"
+      service_identity.enabled: "true"
+  - name: scalar_body
+    accept: false
+    body: "5"
+    error: expected type 'map[string]interface {}'
+  - name: unknown_key
+    accept: false
+    body: "foo: 1"
+    error: "invalid keys: foo"
+  - name: unknown_nested_key
+    accept: false
+    body: "cardinality: {windw: 1h}"
+    error: "invalid keys: windw"
+  - name: drops_map
+    accept: false
+    body: "drops: {metric: x}"
+    note: lists must be lists
+  - name: drops_null
+    accept: true
+    body: "drops:"
+    note: a null section is the same as leaving it out
+
+  # ---- strings: YAML scalars that are not strings are rejected ---------
+  - name: float_version
+    accept: false
+    body: "policy_version: 1.0"
+    error: "'policy_version' expected type 'string', got unconvertible type 'float64'"
+    note: unquoted 1.0 is a YAML float; quote it
+  - name: quoted_float_version
+    accept: true
+    body: 'policy_version: "1.0"'
+    expect: {policy_version: "1.0"}
+  - name: int_version
+    accept: false
+    body: "policy_version: 7"
+    error: unconvertible type 'int'
+  - name: date_version
+    accept: false
+    body: "policy_version: 2026-10-20"
+    error: unconvertible type 'time.Time'
+    note: an unquoted date is a YAML timestamp
+  - name: timestamp_version
+    accept: false
+    body: |
+      policy_version: 2026-10-20T10:00:00Z
+      aggregations:
+        - metric: x
+          drop_attributes: [a]
+      drops:
+        - metric: y
+    error: unconvertible type 'time.Time'
+    note: an unquoted RFC 3339 timestamp is a YAML timestamp; quote it
+  - name: bool_version
+    accept: false
+    body: "policy_version: true"
+    error: unconvertible type 'bool'
+  - name: int_metric
+    accept: false
+    body: |
+      drops:
+        - metric: 404
+    error: "'drops[0].metric' expected type 'string', got unconvertible type 'int'"
+  - name: quoted_int_metric
+    accept: true
+    body: |
+      drops:
+        - metric: "404"
+    expect: {drops.0.metric: "404"}
+  - name: int_drop_attribute
+    accept: false
+    body: |
+      aggregations:
+        - metric: x
+          drop_attributes: [123]
+    error: "'aggregations[0].drop_attributes[0]' expected type 'string', got unconvertible type 'int'"
+
+  # ---- booleans: only YAML true/false ----------------------------------
+  - name: yes_bool
+    accept: false
+    body: |
+      service_identity:
+        enabled: yes
+    error: "'service_identity.enabled' expected type 'bool', got unconvertible type 'string'"
+    note: YAML 1.2 (the collector's parser) reads yes/no/on/off as strings
+  - name: no_bool
+    accept: false
+    body: |
+      service_identity:
+        enabled: no
+    error: unconvertible type 'string'
+  - name: quoted_bool
+    accept: false
+    body: |
+      service_identity:
+        enabled: "true"
+    error: unconvertible type 'string'
+  - name: int_bool
+    accept: false
+    body: |
+      service_identity:
+        enabled: 1
+    error: unconvertible type 'int'
+  - name: true_bool
+    accept: true
+    body: |
+      service_identity:
+        enabled: true
+    expect: {service_identity.enabled: "true"}
+
+  # ---- integers ------------------------------------------------------
+  - name: max_series_string
+    accept: false
+    body: 'cardinality: {limits: [{metric: x, max_series: "10"}]}'
+    error: unconvertible type 'string'
+  - name: max_series_float
+    accept: true
+    portal: reject
+    body: "cardinality: {limits: [{metric: x, max_series: 1.5}]}"
+    expect: {cardinality.limits.0.max_series: "1"}
+    note: the collector truncates 1.5 to 1; the portal should require an integer
+  - name: max_series_negative
+    accept: false
+    body: "cardinality: {limits: [{metric: x, max_series: -1}]}"
+    error: max_series must not be negative
+  - name: max_sources_negative
+    accept: false
+    body: "aggregation_state: {max_sources: -1}"
+    error: max_sources must not be negative
+
+  # ---- durations: Go duration strings ----------------------------------
+  # aggregation_state rule: effective ttl (ttl, or 10m when 0/absent) must be
+  # >= 1m and >= warmup (default 2m when absent; 0 disables). gauge_staleness
+  # must be 0 (default 5m) or >= 1m.
+  - name: ttl_tiny
+    accept: false
+    body: "aggregation_state: {ttl: 1s}"
+    error: aggregation_state.ttl must be at least 1m0s
+  - name: ttl_59s
+    accept: false
+    body: "aggregation_state: {ttl: 59s}"
+    error: aggregation_state.ttl must be at least 1m0s
+  - name: ttl_1m_with_default_warmup
+    accept: false
+    body: "aggregation_state: {ttl: 1m}"
+    error: aggregation_state.ttl (1m0s) must be at least aggregation_state.warmup (2m0s)
+    note: the default warm-up (2m) applies when warmup is absent
+  - name: ttl_1m_warmup_off
+    accept: true
+    body: "aggregation_state: {ttl: 1m, warmup: 0s}"
+  - name: ttl_2m
+    accept: true
+    body: "aggregation_state: {ttl: 2m}"
+    expect: {aggregation_state.ttl: "2m0s"}
+  - name: ttl_zero_means_default
+    accept: true
+    body: "aggregation_state: {ttl: 0s, warmup: 10m}"
+  - name: warmup_longer_than_default_ttl
+    accept: false
+    body: "aggregation_state: {warmup: 11m}"
+    error: aggregation_state.ttl (10m0s) must be at least aggregation_state.warmup (11m0s)
+  - name: ttl_bare_int
+    accept: false
+    body: "aggregation_state: {ttl: 600}"
+    error: aggregation_state.ttl must be at least 1m0s
+    note: a bare integer decodes as nanoseconds
+  - name: ttl_bare_int_large
+    accept: true
+    portal: reject
+    body: "aggregation_state: {ttl: 600000000000}"
+    expect: {aggregation_state.ttl: "10m0s"}
+    note: nanoseconds again; the portal should require a duration string
+  - name: ttl_no_unit_string
+    accept: false
+    body: 'aggregation_state: {ttl: "600"}'
+    error: missing unit in duration
+  - name: gauge_staleness_30s
+    accept: false
+    body: "aggregation_state: {gauge_staleness: 30s}"
+    error: aggregation_state.gauge_staleness must be 0 or at least 1m0s
+  - name: gauge_staleness_2m
+    accept: true
+    body: "aggregation_state: {gauge_staleness: 2m}"
+  - name: window_negative
+    accept: false
+    body: "cardinality: {window: -1h}"
+    error: cardinality.window must not be negative
+
+  # ---- rules ---------------------------------------------------------
+  - name: empty_drop_attributes
+    accept: false
+    body: "aggregations: [{metric: x, drop_attributes: []}]"
+    error: drop_attributes must not be empty
+  - name: identity_drop
+    accept: false
+    body: "aggregations: [{metric: x, drop_attributes: [xscaler.collector.id]}]"
+    error: cannot drop the collector identity attribute
+  - name: custom_identity_drop
+    accept: false
+    body: |
+      collector_identity: {attribute: node}
+      aggregations: [{metric: x, drop_attributes: [node]}]
+    error: cannot drop the collector identity attribute "node"
+  - name: bad_gauge_function
+    accept: false
+    body: "aggregations: [{metric: x, drop_attributes: [a], gauge_function: median}]"
+    error: unknown gauge_function "median"
+  - name: bad_regex
+    accept: false
+    body: 'drops: [{metric: "regex:("}]'
+    error: invalid regex
+  - name: empty_metric
+    accept: false
+    body: 'drops: [{metric: ""}]'
+    error: metric pattern must not be empty
+
+  # ---- ${...} expansion: the collector resolves these from ITS env -------
+  - name: env_plain
+    accept: true
+    portal: reject
+    body: |
+      collector_identity:
+        value: "${env:XSCALER_POLICY_TEST_ENV}"
+    expect: {collector_identity.value: from-collector-env}
+    note: expands from the collector's environment; a policy must not read it
+  - name: env_bare
+    accept: true
+    portal: reject
+    body: 'policy_version: "${XSCALER_POLICY_TEST_ENV}"'
+    expect: {policy_version: from-collector-env}
+    note: env is the default scheme, so ${NAME} expands too
+  - name: env_escape
+    accept: true
+    portal: reject
+    body: |
+      collector_identity:
+        value: "$\x7Benv:XSCALER_POLICY_TEST_ENV}"
+    expect: {collector_identity.value: from-collector-env}
+    note: a YAML escape (\x7B is "{") hides ${ from a check on the raw text; check decoded strings
+  - name: env_linejoin
+    accept: true
+    portal: reject
+    body: |
+      policy_version: "$\
+        {env:XSCALER_POLICY_TEST_ENV}"
+    expect: {policy_version: from-collector-env}
+    note: an escaped line break in a double-quoted scalar joins "$" and "{env:...}"
+  - name: env_missing
+    accept: true
+    portal: reject
+    body: 'policy_version: "${env:XSCALER_POLICY_TEST_UNSET}"'
+    expect: {policy_version: ""}
+    note: an unset variable expands to an empty string, silently
+  - name: env_dollar_escape
+    accept: true
+    portal: reject
+    body: |
+      collector_identity:
+        value: "$${env:XSCALER_POLICY_TEST_ENV}"
+    expect: {collector_identity.value: "${env:XSCALER_POLICY_TEST_ENV}"}
+    note: $$ is the escape and yields a literal ${...}; the portal rejects decoded strings containing "${" or "$$"
+  - name: regex_end_anchor
+    accept: true
+    body: |
+      drops:
+        - metric: "regex:^go_gc_.*$"
+    expect: {drops.0.metric: "regex:^go_gc_.*$"}
+    note: a lone "$" is left as written, so regex end anchors are safe
+  - name: lone_dollar_forms
+    accept: true
+    body: |
+      collector_identity:
+        value: "a$b $1 $HOME $(HOME) $ {HOME}"
+    expect: {collector_identity.value: "a$b $1 $HOME $(HOME) $ {HOME}"}
+    note: only ${...} expands and only $$ is rewritten; every other "$" form is literal
+  - name: double_dollar
+    accept: true
+    portal: reject
+    body: |
+      drops:
+        - metric: "regex:x$$"
+    expect: {drops.0.metric: "regex:x$"}
+    note: $$ becomes $ anywhere in a string, so the stored text is not what runs
+  - name: double_dollar_name
+    accept: true
+    portal: reject
+    body: |
+      collector_identity:
+        value: "$$HOME"
+    expect: {collector_identity.value: "$HOME"}
+    note: $$ is rewritten even without braces
+  - name: unclosed_env
+    accept: true
+    portal: reject
+    body: |
+      collector_identity:
+        value: "${HOME"
+    expect: {collector_identity.value: "${HOME"}
+    note: an unclosed ${ is left as written; the portal refuses any ${ anyway

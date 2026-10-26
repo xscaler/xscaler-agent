@@ -62,38 +62,38 @@ jobs:
           # path has moved to xscaler-collector.
           - flavour: default
             target: default
-            context: legacy
+            file: legacy/Dockerfile
             image: ghcr.io/xscaler/xscaler-agent
             platform: linux/amd64
             runner: ubuntu-24.04
           - flavour: default
             target: default
-            context: legacy
+            file: legacy/Dockerfile
             image: ghcr.io/xscaler/xscaler-agent
             platform: linux/arm64
             runner: ubuntu-24.04-arm
           - flavour: ebpf
             target: ebpf
-            context: legacy
+            file: legacy/Dockerfile
             image: ghcr.io/xscaler/xscaler-agent
             platform: linux/amd64
             runner: ubuntu-24.04
           - flavour: ebpf
             target: ebpf
-            context: legacy
+            file: legacy/Dockerfile
             image: ghcr.io/xscaler/xscaler-agent
             platform: linux/arm64
             runner: ubuntu-24.04-arm
           # xscaler-collector: the one image for every role.
           - flavour: collector
             target: image
-            context: .
+            file: Dockerfile
             image: ghcr.io/xscaler/xscaler-collector
             platform: linux/amd64
             runner: ubuntu-24.04
           - flavour: collector
             target: image
-            context: .
+            file: Dockerfile
             image: ghcr.io/xscaler/xscaler-collector
             platform: linux/arm64
             runner: ubuntu-24.04-arm
@@ -122,7 +122,10 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
+          # Repository root for every image: the legacy Dockerfile also
+          # copies processor/ (the in-repo xscaler_policy processor).
+          context: .
+          file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           build-args: |

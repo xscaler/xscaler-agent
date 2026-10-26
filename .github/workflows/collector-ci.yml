@@ -4,6 +4,7 @@ on:
     paths:
       - "Dockerfile"
       - "builder.yaml"
+      - "processor/**"
       - "versions.env"
       - "scripts/**"
       - "examples/**"
@@ -13,6 +14,7 @@ on:
     paths:
       - "Dockerfile"
       - "builder.yaml"
+      - "processor/**"
       - "versions.env"
       - "scripts/**"
       - "examples/**"

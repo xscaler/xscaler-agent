@@ -25,7 +25,9 @@ while read -r mod ver; do
     go.opentelemetry.io/collector/confmap/*) want="v$OTEL_STABLE_VERSION" ;;
     go.opentelemetry.io/collector/*) want="v$OTEL_VERSION" ;;
     go.opentelemetry.io/obi/*) want="v$OBI_VERSION" ;;
-    *) fail "unexpected module $mod (upstream modules only)"; continue ;;
+    # In-repo components, built from processor/ through `path:`.
+    github.com/xscaler/xscaler-agent/processor/*) continue ;;
+    *) fail "unexpected module $mod (upstream or in-repo modules only)"; continue ;;
   esac
   [ "$ver" = "$want" ] || fail "$mod is $ver, versions.env says $want"
 done < <(grep -E '^\s*- gomod:' "$root/builder.yaml" | awk '{print $3, $4}')

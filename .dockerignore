@@ -1,7 +1,10 @@
-# The build only needs the Dockerfile and builder.yaml. Keep everything else
-# out of the context so the OBI generate + OCB build stays lean.
+# The builds need the Dockerfiles, the OCB manifests and our own components.
+# Keep everything else out of the context so the OBI generate + OCB build
+# stays lean.
 *
 !Dockerfile
 !builder.yaml
 !legacy/Dockerfile
 !legacy/builder.yaml
+!processor/
+processor/**/*_test.go

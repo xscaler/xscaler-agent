@@ -14,10 +14,17 @@ opampsupervisor, and OBI. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
 One binary and one image for every role: node DaemonSet, cluster Deployment,
 Linux host and Windows host. It is built with the [OpenTelemetry Collector
 Builder](https://opentelemetry.io/docs/collector/custom-collector/) (OCB) from
-[`builder.yaml`](builder.yaml), using upstream modules only, all at one pinned
-upstream version. [OBI](https://opentelemetry.io/docs/zero-code/obi/) eBPF
-auto-instrumentation is compiled into every build and only runs where a config
-enables the `obi` receiver and the process holds the BPF capabilities.
+[`builder.yaml`](builder.yaml): upstream modules, all at one pinned upstream
+version, plus our own
+[`xscaler_policy`](processor/xscalerpolicyprocessor/README.md) processor, built
+from [`processor/`](processor) in this repository.
+[OBI](https://opentelemetry.io/docs/zero-code/obi/) eBPF auto-instrumentation
+is compiled into every build and only runs where a config enables the `obi`
+receiver and the process holds the BPF capabilities.
+
+A component missing from `builder.yaml` fails any config that names it: add it
+there, and to `scripts/expected-components.txt`, before a template starts using
+it.
 
 There is no contrib fork. If an upstream component ever needs a patch, it gets a
 `replaces:` line in `builder.yaml` pointing that one module at
@@ -68,18 +75,21 @@ these, or reports one that is not listed.
 
 | Kind | Components |
 | --- | --- |
-| Receivers | `otlp`, `hostmetrics`, `filelog` (with the `container` operator), `journald`, `windowseventlog`, `prometheus`, `kubeletstats`, `k8s_cluster`, `k8sobjects`, `k8s_events` (kept for configs pushed to 0.4.x agents), `postgresql`, `mysql`, `mongodb`, `redis`, `sqlserver`, `oracledb`, `sqlquery`, `snmp`, `netflow`, `awscloudwatch`, `azuremonitor`, `googlecloudmonitoring`, `obi`, `nop` |
-| Processors | `memory_limiter`, `k8sattributes`, `resourcedetection`, `resource`, `transform`, `filter`, `probabilistic_sampler`, `tail_sampling`, `batch` |
+| Receivers | `otlp`, `hostmetrics`, `filelog` (with the `container` operator), `journald`, `windowseventlog`, `windows_perf_counters`, `prometheus`, `kubeletstats`, `k8s_cluster`, `k8sobjects`, `k8s_events` (kept for configs pushed to 0.4.x agents), `receiver_creator`, `docker_stats`, `syslog`, `tcp_log`, `udp_log`, `postgresql`, `mysql`, `mongodb`, `redis`, `sqlserver`, `oracledb`, `sqlquery`, `elasticsearch`, `nginx`, `apache`, `rabbitmq`, `kafka_metrics`, `http_check`, `statsd`, `snmp`, `netflow`, `awscloudwatch`, `azuremonitor`, `googlecloudmonitoring`, `obi`, `nop` |
+| Processors | `memory_limiter`, `k8sattributes`, `resourcedetection`, `resource`, `attributes`, `transform`, `filter`, `metrics_transform`, `groupbyattrs`, `cumulative_to_delta`, `delta_to_cumulative`, `interval`, `redaction`, `probabilistic_sampler`, `tail_sampling`, `batch`, `xscaler_policy` |
+| Connectors | `forward`, `span_metrics`, `service_graph`, `routing`, `count` |
 | Exporters | `otlp`, `otlphttp`, `debug`, `nop` |
-| Extensions | `opamp`, `health_check`, `file_storage`, `k8s_leader_elector` |
+| Extensions | `opamp`, `health_check`, `file_storage`, `k8s_leader_elector`, `pprof`, `basicauth`, `bearertokenauth`, `k8s_observer`, `host_observer`, `zpages` |
 | Providers | `env`, `file`, `http`, `https`, `yaml` |
 
 The `components` command, and the list the supervisor reports to agent-api,
 include the deprecated pre-rename names (`filelog` next to `file_log`); configs
 written with the old names still load and log a deprecation warning.
 
-`builder.yaml` has commented slots for `github.com/xscaler/otelcol-components`
-(the `xscaler_policy` processor and the cardinality guard).
+`xscaler_policy` is ours: the policy fragment the portal pushes over OpAMP
+(drops, service-level aggregation, cardinality guard). `builder.yaml` builds it
+from `processor/xscalerpolicyprocessor` with `path:`, and
+[`processor-ci.yml`](.github/workflows/processor-ci.yml) runs its tests.
 
 `journald` runs `journalctl`, so it works on package installs where the host has
 it. The image is Alpine-based and does not ship `journalctl`.
@@ -219,12 +229,16 @@ ghcr.io/xscaler/xscaler-collector:latest
 
 Until every install path runs `xscaler-collector`, the release workflow still
 publishes the old images from [`legacy/Dockerfile`](legacy/Dockerfile) at
-collector 0.151.0 / OBI v0.9.0:
+collector 0.151.0 / OBI v0.9.0. Both tags carry the same OCB build from
+[`legacy/builder.yaml`](legacy/builder.yaml), with `obi` and `xscaler_policy`:
 
 ```
-ghcr.io/xscaler/xscaler-agent:<version>        # supervisor + prebuilt otelcol-contrib
-ghcr.io/xscaler/xscaler-agent:<version>-ebpf   # supervisor + OCB build with obi
+ghcr.io/xscaler/xscaler-agent:<version>        # supervisor + OCB build
+ghcr.io/xscaler/xscaler-agent:<version>-ebpf   # same binary; the chart's eBPF tag
 ```
+
+The legacy build copies `processor/`, so it runs from the repository root:
+`docker build -f legacy/Dockerfile .`.
 
 The monorepo's `deploy/agents` is an older copy of the same build and is due
 for removal once local docker-compose uses `xscaler-collector`.

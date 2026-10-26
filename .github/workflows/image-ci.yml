@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - "legacy/**"
+      - "processor/**"
       - ".github/workflows/image-ci.yml"
 
 permissions:
@@ -39,7 +40,9 @@ jobs:
       - name: Build ${{ matrix.flavour }} image (${{ matrix.platform }}, no push)
         uses: docker/build-push-action@v6
         with:
-          context: legacy
+          # Repository root: legacy/Dockerfile copies processor/ too.
+          context: .
+          file: legacy/Dockerfile
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           push: false

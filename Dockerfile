@@ -30,6 +30,8 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS sources
 ARG OTEL_VERSION=0.163.0
 ARG VERSION=0.0.0-dev
 COPY --from=obi-gen /src/obi /src/obi
+# Our own components; builder.yaml points at them with `path:`.
+COPY processor /src/processor
 WORKDIR /build
 COPY builder.yaml .
 RUN sed -i "s/^  version: .*/  version: ${VERSION}/" builder.yaml
@@ -77,16 +79,18 @@ COPY --from=collector /out/ /
 COPY --from=supervisor /out/ /
 
 # `--target sources-out -o .build` exports the generated trees GoReleaser
-# compiles in the release workflow: collector/ (OCB output, OBI replace made
-# relative), obi/ (the generated OBI tree) and contrib/ (the supervisor's
-# sparse checkout). Git metadata is dropped; nothing in the build reads it.
+# compiles in the release workflow: collector/ (OCB output, local replaces
+# made relative), obi/ (the generated OBI tree), processor/ (our components)
+# and contrib/ (the supervisor's sparse checkout). Git metadata is dropped; nothing in the build reads it.
 FROM sources AS sources-export
 COPY --from=supervisor-src /src/contrib /out/contrib
 RUN cp -a /build/_build /out/collector \
  && cp -a /src/obi /out/obi \
+ && cp -a /src/processor /out/processor \
  && rm -rf /out/obi/.git /out/contrib/.git \
  && cd /out/collector \
- && go mod edit -replace go.opentelemetry.io/obi=../obi
+ && go mod edit -replace go.opentelemetry.io/obi=../obi \
+      -replace github.com/xscaler/xscaler-agent/processor/xscalerpolicyprocessor=../processor/xscalerpolicyprocessor
 
 FROM scratch AS sources-out
 COPY --from=sources-export /out/ /

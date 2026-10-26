@@ -1,9 +1,10 @@
 # OpenTelemetry Collector Builder (OCB) manifest for xscaler-collector.
 #
 # One distribution for every role: node DaemonSet, cluster Deployment, Linux
-# host and Windows host. Upstream modules only, all at the pin in versions.env
-# (contrib + core beta = OTEL_VERSION, core stable = OTEL_STABLE_VERSION,
-# contrib stable-base = CONTRIB_STABLE_VERSION).
+# host and Windows host. Upstream modules at the pin in versions.env (contrib
+# + core beta = OTEL_VERSION, core stable = OTEL_STABLE_VERSION, contrib
+# stable-base = CONTRIB_STABLE_VERSION), plus our own components from
+# processor/ in this repository, built from source through `path:`.
 # scripts/check-pins.sh fails CI if any line here drifts from that file, and
 # scripts/expected-components.txt is what `xscaler-collector components` must
 # report.
@@ -29,7 +30,14 @@ extensions:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.163.0
   # Cluster Deployment: one replica runs k8s_cluster / k8sobjects at a time.
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/k8sleaderelector v0.163.0
-  # Slot: github.com/xscaler/otelcol-components extensions go here.
+  # Ansible roles and portal templates: profiling, auth to scrape targets,
+  # and the observers receiver_creator discovers endpoints with.
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/pprofextension v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/basicauthextension v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/bearertokenauthextension v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/observer/k8sobserver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/observer/hostobserver v0.163.0
+  - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.163.0
 
 receivers:
   - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.163.0
@@ -50,6 +58,14 @@ receivers:
   # Kept so configs already pushed to xscaler-agent 0.3.x/0.4.x eBPF agents
   # still load. New configs use k8sobjects.
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8seventsreceiver v0.163.0
+  # Endpoint discovery and container stats.
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/receivercreator v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/dockerstatsreceiver v0.163.0
+  # Windows performance counters and log transports (Ansible roles).
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/windowsperfcountersreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/syslogreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/tcplogreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/udplogreceiver v0.163.0
   # Databases.
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/postgresqlreceiver v0.163.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/mysqlreceiver v0.163.0
@@ -58,6 +74,14 @@ receivers:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/sqlserverreceiver v0.163.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/oracledbreceiver v0.163.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/sqlqueryreceiver v0.163.0
+  # Common systems the portal templates configure.
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/elasticsearchreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/nginxreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/apachereceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/rabbitmqreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/kafkametricsreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/httpcheckreceiver v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/statsdreceiver v0.163.0
   # Network.
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/snmpreceiver v0.163.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/netflowreceiver v0.163.0
@@ -84,10 +108,25 @@ processors:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.163.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor v0.163.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor v0.163.0
-  # Slot: github.com/xscaler/otelcol-components processors go here:
-  #   xscaler_policy  (tenant policy enforcement)
-  #   cardinality guard
-  # - gomod: github.com/xscaler/otelcol-components/processor/xscalerpolicyprocessor vX.Y.Z
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/groupbyattrsprocessor v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/cumulativetodeltaprocessor v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/intervalprocessor v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/redactionprocessor v0.163.0
+  # Our own, in this repository: the policy fragment the portal pushes over
+  # OpAMP (drops, service-level aggregation, cardinality guard). The
+  # Dockerfile copies processor/ to /src/processor.
+  - gomod: github.com/xscaler/xscaler-agent/processor/xscalerpolicyprocessor v0.0.0
+    path: /src/processor/xscalerpolicyprocessor
+
+connectors:
+  - gomod: go.opentelemetry.io/collector/connector/forwardconnector v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/connector/spanmetricsconnector v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/connector/servicegraphconnector v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/connector/routingconnector v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/connector/countconnector v0.163.0
 
 exporters:
   # Both run their sending_queue on file_storage in the shipped configs.
