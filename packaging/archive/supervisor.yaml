@@ -22,6 +22,8 @@ agent:
     non_identifying_attributes:
       install_method: archive
       agent_name: ${env:XSCALER_AGENT_NAME:-}
+      # agent-api uses this to offer the collector policy.
+      xscaler.distribution: xscaler-collector
 
 storage:
   directory: ./state

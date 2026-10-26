@@ -29,6 +29,8 @@ agent:
     non_identifying_attributes:
       platform: windows
       install_method: msi
+      # agent-api uses this to offer the collector policy.
+      xscaler.distribution: xscaler-collector
       # Add labels here to target configs at this host, for example:
       # environment: prod
 

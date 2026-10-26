@@ -215,6 +215,10 @@ legacy images needs it to report config status. Both report
 `reports_available_components` and `k8s.cluster.name`, which agent-api records
 in its collector inventory together with role, version and host.
 
+The xscaler-collector image also reports `xscaler.distribution:
+xscaler-collector`, which agent-api uses to offer the collector policy
+(the `xscaler_policy` processor). That needs xscaler-collector 0.6.0 or newer.
+
 ### Images
 
 ```

@@ -27,6 +27,8 @@ agent:
       platform: linux
       install_method: package
       agent_name: ${env:XSCALER_AGENT_NAME}
+      # agent-api uses this to offer the collector policy.
+      xscaler.distribution: xscaler-collector
       # Add labels here to target configs at this host, for example:
       # environment: prod
 

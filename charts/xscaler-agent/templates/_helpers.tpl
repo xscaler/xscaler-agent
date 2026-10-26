@@ -147,6 +147,12 @@ agent:
       {{- range $k, $v := $ctx.Values.labels }}
       {{ $k }}: {{ $v | quote }}
       {{- end }}
+      {{- if include "xscaler-agent.collectorImage" $ctx }}
+      # agent-api reads this to offer the xscaler_policy processor. Only the
+      # xscaler-collector image has it (legacy 0.151 images do not), and it
+      # sits after the user labels so values.yaml cannot override it.
+      xscaler.distribution: "xscaler-collector"
+      {{- end }}
       {{- if eq $role $ctx.Values.nodeAgent.name }}
       # Capability flag: this pod spec sets K8S_NODE_IP, so a pushed config may
       # dial the node by IP. Assignments select it with `Exists`. Node role only
