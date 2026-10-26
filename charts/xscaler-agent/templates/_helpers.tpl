@@ -32,13 +32,22 @@ one-off (e.g. a locally built dev tag).
 {{- end -}}
 
 {{/*
-Node agent image. The OBI eBPF receiver ships only in the `-ebpf` image
-variant, so the DaemonSet uses `<tag>-ebpf` when eBPF is on and the plain
-`<tag>` otherwise. The cluster Deployment always uses the plain tag.
+"true" when image.repository is the xscaler-collector image (every build has
+OBI, supervisor 0.163+), empty for the legacy xscaler-agent images.
+*/}}
+{{- define "xscaler-agent.collectorImage" -}}
+{{- if hasSuffix "/xscaler-collector" .Values.image.repository -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Node agent image. On the legacy xscaler-agent images the OBI eBPF receiver
+ships only in the `-ebpf` variant, so the DaemonSet uses `<tag>-ebpf` when eBPF
+is on. xscaler-collector has OBI in every build and one tag. The cluster
+Deployment always uses the plain tag.
 */}}
 {{- define "xscaler-agent.nodeImage" -}}
 {{- $tag := include "xscaler-agent.imageTag" . -}}
-{{- if .Values.nodeAgent.ebpf.enabled -}}
+{{- if and .Values.nodeAgent.ebpf.enabled (not (include "xscaler-agent.collectorImage" .)) -}}
 {{- $tag = printf "%s-ebpf" $tag -}}
 {{- end -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
@@ -111,11 +120,18 @@ server:
 capabilities:
   accepts_remote_config: true
   reports_effective_config: true
+  {{- if not (include "xscaler-agent.collectorImage" $ctx) }}
+  # The 0.151 supervisor in the legacy images needs this to send config status;
+  # 0.163 sends it whenever accepts_remote_config is on and refuses to start
+  # when it is set.
   reports_remote_config: true
+  {{- end }}
   reports_health: true
   # Required since OTEL 0.151: heartbeat is opt-in. Without it the supervisor
   # connects once and goes silent, so agent-api's stale sweep marks it offline.
   reports_heartbeat: true
+  # The collector's component list, recorded by agent-api's inventory.
+  reports_available_components: true
 
 agent:
   executable: /usr/local/bin/otelcol-contrib
@@ -124,9 +140,18 @@ agent:
       service.name: io.opentelemetry.collector
     non_identifying_attributes:
       role: {{ $role | quote }}
+      # The cluster this agent runs in, for agent-api's inventory and so pushed
+      # configs can be matched per cluster.
+      k8s.cluster.name: {{ default "kubernetes" $ctx.Values.clusterName | quote }}
       agent_name: {{ printf "%s-%s" (include "xscaler-agent.fullname" $ctx) $role | quote }}
       {{- range $k, $v := $ctx.Values.labels }}
       {{ $k }}: {{ $v | quote }}
+      {{- end }}
+      {{- if include "xscaler-agent.collectorImage" $ctx }}
+      # agent-api reads this to offer the xscaler_policy processor. Only the
+      # xscaler-collector image has it (legacy 0.151 images do not), and it
+      # sits after the user labels so values.yaml cannot override it.
+      xscaler.distribution: "xscaler-collector"
       {{- end }}
       {{- if eq $role $ctx.Values.nodeAgent.name }}
       # Capability flag: this pod spec sets K8S_NODE_IP, so a pushed config may

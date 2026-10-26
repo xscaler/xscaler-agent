@@ -1,0 +1,36 @@
+# OpAMP supervisor for the xscaler-collector package. The supervisor enrolls
+# with xScaler and runs xscaler-collector with the configuration assigned to
+# this agent's labels.
+#
+# The token, endpoint and agent name come from
+# /etc/xscaler-collector/xscaler-collector.env; set them there.
+server:
+  endpoint: ${env:XSCALER_ENDPOINT}
+  headers:
+    Authorization: "Bearer ${env:XSCALER_ENROLLMENT_TOKEN}"
+
+capabilities:
+  accepts_remote_config: true
+  reports_effective_config: true
+  # Do not add reports_remote_config: supervisor 0.163 sends remote config
+  # status whenever accepts_remote_config is on and refuses to start with it.
+  reports_health: true
+  reports_heartbeat: true
+  reports_available_components: true
+
+agent:
+  executable: /usr/bin/xscaler-collector
+  description:
+    identifying_attributes:
+      service.name: io.opentelemetry.collector
+    non_identifying_attributes:
+      platform: linux
+      install_method: package
+      agent_name: ${env:XSCALER_AGENT_NAME}
+      # agent-api uses this to offer the collector policy.
+      xscaler.distribution: xscaler-collector
+      # Add labels here to target configs at this host, for example:
+      # environment: prod
+
+storage:
+  directory: /var/lib/xscaler-collector

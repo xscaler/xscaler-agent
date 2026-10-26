@@ -1,0 +1,167 @@
+name: collector-ci
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "builder.yaml"
+      - "processor/**"
+      - "versions.env"
+      - "scripts/**"
+      - "examples/**"
+      - ".github/workflows/collector-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "builder.yaml"
+      - "processor/**"
+      - "versions.env"
+      - "scripts/**"
+      - "examples/**"
+      - ".github/workflows/collector-ci.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  pins:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: builder.yaml and Dockerfile match versions.env
+        run: scripts/check-pins.sh
+
+  linux:
+    needs: pins
+    # Native runner per arch: the binary is executed below, not just built.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build binaries (linux/${{ matrix.arch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: binary
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=collector-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=collector-${{ matrix.arch }}
+
+      - name: Components check
+        # Fails on any component missing from (or not listed in)
+        # scripts/expected-components.txt.
+        run: scripts/check-components.sh dist/xscaler-collector
+
+      - name: Validate example configs
+        run: scripts/validate-examples.sh dist/xscaler-collector
+
+      - name: Service identity rules (service.name / namespace / version, agent id)
+        run: scripts/service-identity-test.sh dist/xscaler-collector
+
+      - name: Smoke test (persistent file_storage queue across a restart)
+        run: scripts/smoke-test.sh dist/xscaler-collector
+
+      - name: Supervisor runs
+        run: dist/opampsupervisor --help >/dev/null 2>&1 || dist/opampsupervisor --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xscaler-collector-linux-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 7
+
+  cross:
+    # The same manifest compiled for the host platforms the packages target.
+    needs: pins
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows, arch: amd64 }
+          - { os: windows, arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build binaries (${{ matrix.os }}/${{ matrix.arch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: binary
+          platforms: ${{ matrix.os }}/${{ matrix.arch }}
+          outputs: type=local,dest=dist
+          # OBI generate, OCB sources and module downloads all run on the
+          # build platform, so the amd64 job's cache covers them.
+          cache-from: type=gha,scope=collector-amd64
+      - run: ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xscaler-collector-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 7
+
+  windows:
+    # Run the Windows binary: components, and the Windows example, which only
+    # builds on Windows (windows_event_log).
+    needs: cross
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: xscaler-collector-windows-amd64
+          path: dist
+      - name: Components check
+        run: scripts/check-components.sh dist/xscaler-collector.exe
+      - name: Validate windows-host.yaml
+        run: scripts/validate-examples.sh dist/xscaler-collector.exe
+      - name: Supervisor runs
+        run: dist/opampsupervisor.exe --help 2>&1 | head -3
+
+  image:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build multi-arch image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: xscaler-collector:ci
+          cache-from: |
+            type=gha,scope=collector-amd64
+            type=gha,scope=collector-arm64
+      - name: Load amd64 image and check it
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: xscaler-collector:ci
+          cache-from: type=gha,scope=collector-amd64
+      - name: Image entrypoint, binaries and legacy path
+        run: |
+          docker run --rm --entrypoint xscaler-collector xscaler-collector:ci --version
+          docker run --rm --entrypoint otelcol-contrib xscaler-collector:ci --version
+          docker run --rm --entrypoint /bin/sh xscaler-collector:ci -c 'id -u; command -v opampsupervisor'

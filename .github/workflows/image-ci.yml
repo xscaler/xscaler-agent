@@ -1,9 +1,10 @@
+# Legacy xscaler-agent images (default + -ebpf), kept buildable until every
+# install path runs xscaler-collector. collector-ci.yml covers the new build.
 name: image-ci
 on:
   pull_request:
     paths:
-      - "Dockerfile"
-      - "builder.yaml"
+      - "legacy/**"
       - "processor/**"
       - ".github/workflows/image-ci.yml"
 
@@ -39,7 +40,9 @@ jobs:
       - name: Build ${{ matrix.flavour }} image (${{ matrix.platform }}, no push)
         uses: docker/build-push-action@v6
         with:
+          # Repository root: legacy/Dockerfile copies processor/ too.
           context: .
+          file: legacy/Dockerfile
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           push: false

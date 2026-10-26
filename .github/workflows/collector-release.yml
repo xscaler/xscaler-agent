@@ -1,0 +1,538 @@
+name: collector-release
+# Release artifacts for xscaler-collector: binaries, tar.gz/zip archives,
+# deb/rpm packages and MSIs, with checksums, cosign signatures, SBOMs and
+# build provenance, then the apt/yum repository at packages.xscalerlabs.com.
+#
+# A v* tag publishes. release.yml calls this workflow with the tag it creates
+# (a tag pushed with GITHUB_TOKEN starts no workflow on its own). A tag with a
+# prerelease suffix (v0.6.0-rc.1) goes to the `testing` repository channel and
+# a GitHub prerelease; any other tag to `stable`.
+#
+# Pull requests, pushes to main and manual runs build snapshots and run every
+# install test, and publish nothing. The main runs also save the Go build
+# cache under main, the one ref tag runs can restore it from; without it a
+# tag compiles all twelve binaries cold (about 45 minutes).
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths:
+      - ".goreleaser.yaml"
+      - "Dockerfile"
+      - "builder.yaml"
+      - "processor/**"
+      - "versions.env"
+      - "packaging/**"
+      - ".github/workflows/collector-release.yml"
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to release (v<version>), already pushed
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - ".goreleaser.yaml"
+      - "Dockerfile"
+      - "builder.yaml"
+      - "processor/**"
+      - "versions.env"
+      - "packaging/**"
+      - "scripts/package-*.sh"
+      - "scripts/msi-test.ps1"
+      - "scripts/publish-repo.sh"
+      - ".github/workflows/collector-release.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collector-release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Lower version stamped on the same build; install tests upgrade from it.
+  UPGRADE_FROM_VERSION: 0.0.1
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.m.outputs.tag }}
+      ref: ${{ steps.m.outputs.ref }}
+      version: ${{ steps.m.outputs.version }}
+      publish: ${{ steps.m.outputs.publish }}
+      prerelease: ${{ steps.m.outputs.prerelease }}
+      channel: ${{ steps.m.outputs.channel }}
+    steps:
+      - id: m
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG}"
+          if [ -z "$tag" ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          fi
+          if [ -n "$tag" ]; then
+            case "$tag" in
+              v[0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "::error::tag $tag is not v<major>.<minor>.<patch>[-pre]"; exit 1 ;;
+            esac
+            version="${tag#v}"
+            prerelease=false; channel=stable
+            case "$version" in *-*) prerelease=true; channel=testing ;; esac
+            {
+              echo "tag=$tag"; echo "ref=refs/tags/$tag"; echo "version=$version"
+              echo "publish=true"; echo "prerelease=$prerelease"; echo "channel=$channel"
+            } >> "$GITHUB_OUTPUT"
+          else
+            # Snapshot: GoReleaser picks the version; the collector reports
+            # 0.0.0-dev.
+            {
+              echo "ref=$GITHUB_SHA"; echo "version=0.0.0-dev"
+              echo "publish=false"; echo "prerelease=true"; echo "channel=testing"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+  generate:
+    # OBI `make generate` and OCB `--skip-compilation`: the Dockerfile's
+    # sources stage, exported as plain trees for GoReleaser.
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Generate sources
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: sources-out
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+          outputs: type=local,dest=.build
+          # OBI generate and OCB run on the build platform, so collector-ci's
+          # amd64 cache covers them.
+          cache-from: type=gha,scope=collector-amd64
+      - run: tar -C .build -czf sources.tgz .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sources
+          path: sources.tgz
+          retention-days: 1
+
+  build:
+    needs: [meta, generate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: sources
+      - run: mkdir .build && tar -C .build -xzf sources.tgz && rm sources.tgz
+      - id: go
+        run: |
+          . ./versions.env
+          echo "version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache-dependency-path: |
+            .build/collector/go.sum
+            .build/contrib/cmd/opampsupervisor/go.sum
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          install-only: true
+      - name: RPM signing key
+        if: needs.meta.outputs.publish == 'true'
+        env:
+          KEY: ${{ secrets.PACKAGES_GPG_PRIVATE_KEY }}
+        run: |
+          [ -n "$KEY" ] || { echo "::error::PACKAGES_GPG_PRIVATE_KEY is not set"; exit 1; }
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/rpm-signing.asc"
+          echo "NFPM_GPG_KEY_FILE=$RUNNER_TEMP/rpm-signing.asc" >> "$GITHUB_ENV"
+      - name: Build the upgrade-from packages
+        # Same sources, lower version. Go's build cache makes this run and the
+        # next one share the compile; parallelism 2 keeps the 16GB runner out
+        # of swap on the collector's link step.
+        env:
+          NFPM_PASSPHRASE: ${{ secrets.PACKAGES_GPG_PASSPHRASE }}
+        run: |
+          goreleaser release --snapshot --clean --parallelism 2
+          mkdir -p "$RUNNER_TEMP/old"
+          mv dist/*.deb dist/*.rpm "$RUNNER_TEMP/old/"
+          rm -rf dist
+      - name: Build release artifacts
+        env:
+          UPGRADE_FROM_VERSION: ""
+          NFPM_PASSPHRASE: ${{ secrets.PACKAGES_GPG_PASSPHRASE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ needs.meta.outputs.publish }}" = true ]; then
+            goreleaser release --clean --parallelism 2
+          else
+            goreleaser release --snapshot --clean --parallelism 2
+          fi
+      - id: version
+        run: echo "version=$(jq -r .version dist/metadata.json)" >> "$GITHUB_OUTPUT"
+      - name: Smoke-test the linux/amd64 binaries
+        run: |
+          d=$(mktemp -d)
+          tar -C "$d" -xzf dist/xscaler-collector_*_linux_amd64.tar.gz --strip-components 1
+          "$d/xscaler-collector" --version
+          scripts/check-components.sh "$d/xscaler-collector"
+          "$d/xscaler-supervisor" --help >/dev/null 2>&1 || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-old
+          path: ${{ runner.temp }}/old/*
+          if-no-files-found: error
+          retention-days: 1
+
+  msi:
+    needs: [meta, build]
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, wix: x64 }
+          - { arch: arm64, wix: arm64 }
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: Install WiX 5
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add --global WixToolset.Util.wixext/5.0.2
+      - name: Build MSI
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          WIX_ARCH: ${{ matrix.wix }}
+        run: |
+          # MSI versions are numeric: 0.6.0-rc.1 and 0.6.0 both install as
+          # 0.6.0 (the package allows same-version upgrades).
+          $msiVersion = ($env:VERSION -split '[-~+]')[0]
+          $name = "xscaler-collector_$($env:VERSION)_windows_$($env:ARCH)"
+          Expand-Archive "dist/$name.zip" -DestinationPath bin
+          $bin = (Resolve-Path "bin/$name").Path
+          New-Item -ItemType Directory -Force msi, msi-old | Out-Null
+          $common = @('build', 'packaging/windows/xscaler-collector.wxs', '-arch', $env:WIX_ARCH,
+                      '-ext', 'WixToolset.Util.wixext', '-d', "BinDir=$bin")
+          wix @common -d "Version=$msiVersion" -o "msi/$name.msi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:ARCH -eq 'amd64') {
+            wix @common -d "Version=$($env:UPGRADE_FROM_VERSION)" -o "msi-old/xscaler-collector_$($env:UPGRADE_FROM_VERSION)_windows_amd64.msi"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Get-ChildItem msi, msi-old
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msi-${{ matrix.arch }}
+          path: msi/*.msi
+          if-no-files-found: error
+          retention-days: 7
+      - if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: msi-old
+          path: msi-old/*.msi
+          if-no-files-found: error
+          retention-days: 1
+
+  test-packages:
+    # Install, upgrade (keeping edited config) and remove in each distro.
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "debian:12", type: deb, arch: amd64, runner: ubuntu-24.04 }
+          - { image: "ubuntu:24.04", type: deb, arch: amd64, runner: ubuntu-24.04 }
+          - { image: "ubuntu:24.04", type: deb, arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: "rockylinux:9", type: rpm, arch: x86_64, runner: ubuntu-24.04 }
+          - { image: "rockylinux:9", type: rpm, arch: aarch64, runner: ubuntu-24.04-arm }
+          - { image: "amazonlinux:2023", type: rpm, arch: x86_64, runner: ubuntu-24.04 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: pkgs/new
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages-old
+          path: pkgs/old
+      - name: Install test (${{ matrix.image }}, ${{ matrix.arch }})
+        run: |
+          case "${{ matrix.type }}" in
+            deb) pat="_${{ matrix.arch }}.deb" ;;
+            rpm) pat=".${{ matrix.arch }}.rpm" ;;
+          esac
+          old=$(ls pkgs/old/*"$pat"); new=$(ls pkgs/new/*"$pat")
+          docker run --rm -v "$PWD:/w" -w /w "${{ matrix.image }}" \
+            sh scripts/package-install-test.sh "$old" "$new"
+
+  test-systemd:
+    # The deb on the runner itself, under systemd.
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: pkgs/new
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages-old
+          path: pkgs/old
+      - run: sudo scripts/package-systemd-test.sh pkgs/old/*_amd64.deb pkgs/new/*_amd64.deb
+
+  test-msi:
+    needs: msi
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: msi-amd64
+          path: msi
+      - uses: actions/download-artifact@v8
+        with:
+          name: msi-old
+          path: msi-old
+      - name: Locate MSIs
+        run: |
+          "OLD_MSI=$((Get-Item msi-old/*.msi).FullName)" >> $env:GITHUB_ENV
+          "NEW_MSI=$((Get-Item msi/*.msi).FullName)" >> $env:GITHUB_ENV
+      - name: Install old MSI with token, service starts
+        timeout-minutes: 10
+        run: scripts/msi-test.ps1 -OldMsi $env:OLD_MSI -NewMsi $env:NEW_MSI -Phase install
+      - name: Upgrade keeps config, service restarts
+        timeout-minutes: 10
+        run: scripts/msi-test.ps1 -OldMsi $env:OLD_MSI -NewMsi $env:NEW_MSI -Phase upgrade
+      - name: Uninstall
+        timeout-minutes: 10
+        run: scripts/msi-test.ps1 -OldMsi $env:OLD_MSI -NewMsi $env:NEW_MSI -Phase uninstall
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: msi-logs
+          path: ${{ runner.temp }}/msi-*.log
+          retention-days: 7
+
+  publish:
+    needs: [meta, build, msi, test-packages, test-systemd, test-msi]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "{dist,msi-amd64,msi-arm64}"
+          path: release
+          merge-multiple: true
+      - run: sudo apt-get update -q && sudo apt-get install -y -q rpm2cpio cpio
+      - uses: anchore/sbom-action/download-syft@v0.24.3
+      - uses: sigstore/cosign-installer@v4.1.2
+      - name: SBOMs
+        # One SPDX document per artifact, from the files it installs. The MSIs
+        # carry the same binaries as the windows zips.
+        working-directory: release
+        run: |
+          for f in *; do
+            d=$(mktemp -d)
+            case "$f" in
+              *.tar.gz) tar -C "$d" -xzf "$f" ;;
+              *.zip) unzip -q "$f" -d "$d" ;;
+              *.deb) dpkg-deb -x "$f" "$d" ;;
+              *.rpm) (cd "$d" && rpm2cpio "$OLDPWD/$f" | cpio -idm --quiet --no-absolute-filenames) ;;
+              *.msi) unzip -q "${f%.msi}.zip" -d "$d" ;;
+              *) continue ;;
+            esac
+            syft scan "dir:$d" --source-name xscaler-collector --source-version "$VERSION" \
+              -o "spdx-json=$f.spdx.json" -q
+            rm -rf "$d"
+          done
+      - name: Checksums and signature
+        working-directory: release
+        run: |
+          sums="xscaler-collector_${VERSION}_checksums.txt"
+          sha256sum -- * > "$sums"
+          cosign sign-blob --yes --bundle "$sums.sigstore.json" "$sums"
+          echo "SUMS=release/$sums" >> "$GITHUB_ENV"
+      - uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-checksums: ${{ env.SUMS }}
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            flags=(--verify-tag --generate-notes --title "$TAG")
+            [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+            gh release create "$TAG" "${flags[@]}" release/*
+          fi
+
+  repo:
+    # Add the packages to packages.xscalerlabs.com. One run at a time: each run
+    # reads and rewrites the repository indexes.
+    needs: [meta, publish]
+    runs-on: ubuntu-24.04
+    environment: packages
+    concurrency:
+      group: package-repo
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CHANNEL: ${{ needs.meta.outputs.channel }}
+      BUCKET: ${{ vars.PACKAGES_BUCKET }}
+      BASE_URL: ${{ vars.PACKAGES_BASE_URL || 'https://packages.xscalerlabs.com' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - run: |
+          mkdir pkgs && mv dist/*.deb dist/*.rpm pkgs/
+          sudo apt-get update -q && sudo apt-get install -y -q reprepro createrepo-c
+      - id: gpg
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.PACKAGES_GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PACKAGES_GPG_PASSPHRASE }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.PACKAGES_AWS_ROLE_ARN }}
+          aws-region: eu-west-1
+      - name: Pull repository state
+        run: |
+          aws s3 sync --only-show-errors "s3://$BUCKET/state" root/state
+          for ch in stable testing; do
+            aws s3 sync --only-show-errors "s3://$BUCKET/rpm/$ch/repodata" "root/rpm/$ch/repodata"
+          done
+      - name: Add packages
+        env:
+          GPG_KEY_ID: ${{ steps.gpg.outputs.fingerprint }}
+        run: scripts/publish-repo.sh "$CHANNEL" pkgs root
+      - name: Push repository
+        # Packages first, then indexes, then the signed files that point at
+        # them, so a client never sees an index naming a missing file.
+        run: |
+          s3() { aws s3 "$@" --only-show-errors; }
+          long="public, max-age=31536000, immutable"
+          short="public, max-age=60"
+          s3 sync root/apt/pool "s3://$BUCKET/apt/pool" --cache-control "$long"
+          s3 sync "root/rpm/$CHANNEL/Packages" "s3://$BUCKET/rpm/$CHANNEL/Packages" --cache-control "$long"
+          # Both channels: a publish to one also creates the other's empty,
+          # signed indexes the first time.
+          for ch in stable testing; do
+            s3 sync "root/apt/dists/$ch" "s3://$BUCKET/apt/dists/$ch" \
+              --exclude 'InRelease' --exclude 'Release' --exclude 'Release.gpg' --cache-control "$short"
+            s3 sync "root/rpm/$ch/repodata" "s3://$BUCKET/rpm/$ch/repodata" \
+              --exclude 'repomd.xml*' --cache-control "$short"
+          done
+          for ch in stable testing; do
+            for f in InRelease Release Release.gpg; do
+              s3 cp "root/apt/dists/$ch/$f" "s3://$BUCKET/apt/dists/$ch/$f" --cache-control "$short"
+            done
+            s3 cp "root/rpm/$ch/repodata/repomd.xml" "s3://$BUCKET/rpm/$ch/repodata/repomd.xml" --cache-control "$short"
+            s3 cp "root/rpm/$ch/repodata/repomd.xml.asc" "s3://$BUCKET/rpm/$ch/repodata/repomd.xml.asc" --cache-control "$short"
+            # Superseded yum metadata files (their names carry a checksum).
+            s3 sync "root/rpm/$ch/repodata" "s3://$BUCKET/rpm/$ch/repodata" --delete --cache-control "$short"
+          done
+          for f in gpg.key xscaler-archive-keyring.gpg rpm/xscaler.repo; do
+            s3 cp "root/$f" "s3://$BUCKET/$f" --cache-control "$short"
+          done
+          s3 sync root/state "s3://$BUCKET/state" --delete
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation --distribution-id "${{ vars.PACKAGES_CLOUDFRONT_ID }}" \
+            --paths "/apt/dists/*" "/rpm/stable/repodata/*" "/rpm/testing/repodata/*" /gpg.key /xscaler-archive-keyring.gpg /rpm/xscaler.repo \
+            --query Invalidation.Id --output text
+
+  repo-test:
+    # Install from the public repository, signatures checked.
+    needs: [meta, build, repo]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "ubuntu:24.04", "rockylinux:9", "amazonlinux:2023"]
+    env:
+      BASE_URL: ${{ vars.PACKAGES_BASE_URL || 'https://packages.xscalerlabs.com' }}
+      CHANNEL: ${{ needs.meta.outputs.channel }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Install xscaler-collector ${{ env.VERSION }} from ${{ env.BASE_URL }}
+        run: |
+          docker run --rm -e BASE_URL -e CHANNEL -e VERSION "${{ matrix.image }}" sh -euxc '
+            if command -v apt-get >/dev/null; then
+              apt-get update -q && apt-get install -y -q curl ca-certificates
+              curl -fsSL "$BASE_URL/xscaler-archive-keyring.gpg" -o /usr/share/keyrings/xscaler-archive-keyring.gpg
+              echo "deb [signed-by=/usr/share/keyrings/xscaler-archive-keyring.gpg] $BASE_URL/apt $CHANNEL main" \
+                > /etc/apt/sources.list.d/xscaler.list
+              apt-get update -q
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -q xscaler-collector
+              installed=$(dpkg-query -W -f "\${Version}" xscaler-collector)
+            else
+              curl -fsSL "$BASE_URL/rpm/xscaler.repo" -o /etc/yum.repos.d/xscaler.repo
+              repo=xscaler; [ "$CHANNEL" = testing ] && repo=xscaler-testing
+              dnf install -y --enablerepo "$repo" xscaler-collector
+              installed=$(rpm -q --qf "%{VERSION}" xscaler-collector)
+            fi
+            want=$(echo "$VERSION" | tr - "~")
+            [ "$installed" = "$want" ] || { echo "installed $installed, want $want"; exit 1; }
+            xscaler-collector --version
+          '

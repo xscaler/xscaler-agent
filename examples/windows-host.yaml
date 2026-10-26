@@ -1,0 +1,92 @@
+# Windows host: host metrics, the Application/System event logs, and OTLP from
+# local apps. The MSI runs this under the supervisor as a Windows service.
+#
+# Services on a host: OTLP apps name themselves; event log records carry their
+# provider (the writing application or service) as service.name.
+#
+# Env (set by the MSI on the service): XSCALER_{METRICS,LOGS,TRACES}_ENDPOINT,
+# XSCALER_TOKEN, XSCALER_TENANT_ID.
+
+extensions:
+  health_check: { endpoint: "127.0.0.1:13133" }
+  file_storage:
+    directory: ${env:XSCALER_QUEUE_DIR:-C:\ProgramData\xScaler Collector\queue}
+    create_directory: true
+    timeout: 1s
+
+receivers:
+  otlp:
+    protocols:
+      grpc: { endpoint: "127.0.0.1:4317" }
+      http: { endpoint: "127.0.0.1:4318" }
+  host_metrics:
+    collection_interval: 60s
+    scrapers: { cpu: {}, memory: {}, filesystem: {}, network: {}, disk: {}, paging: {}, processes: {} }
+  windows_event_log/application:
+    channel: Application
+    start_at: end
+    storage: file_storage
+  windows_event_log/system:
+    channel: System
+    start_at: end
+    storage: file_storage
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  resource_detection:
+    detectors: [env, system, ec2, gcp, azure]
+    timeout: 5s
+    override: false
+  transform/xscaler_eventlog_service:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(resource.attributes["service.name"], body["provider"]["name"]) where resource.attributes["service.name"] == nil and body["provider"]["name"] != nil
+  resource/xscaler_agent:
+    attributes:
+      - { key: xscaler.agent.id, value: "${xscaler:agent_id}", action: upsert }
+      - { key: xscaler.agent.profile, value: windows_host, action: upsert }
+  batch: { timeout: 5s, send_batch_size: 512 }
+
+exporters:
+  otlp_http/metrics:
+    metrics_endpoint: ${env:XSCALER_METRICS_ENDPOINT}
+    headers: &auth
+      Authorization: "Bearer ${env:XSCALER_TOKEN}"
+      X-Scope-OrgID: "${env:XSCALER_TENANT_ID}"
+    sending_queue: &queue
+      enabled: true
+      storage: file_storage
+    retry_on_failure: &retry
+      enabled: true
+      max_elapsed_time: 0
+  otlp_http/logs:
+    logs_endpoint: ${env:XSCALER_LOGS_ENDPOINT}
+    headers: *auth
+    sending_queue: *queue
+    retry_on_failure: *retry
+  otlp_http/traces:
+    traces_endpoint: ${env:XSCALER_TRACES_ENDPOINT}
+    headers: *auth
+    sending_queue: *queue
+    retry_on_failure: *retry
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    metrics:
+      receivers: [host_metrics, otlp]
+      processors: [memory_limiter, resource_detection, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    logs:
+      receivers: [windows_event_log/application, windows_event_log/system, otlp]
+      processors: [memory_limiter, resource_detection, transform/xscaler_eventlog_service, resource/xscaler_agent, batch]
+      exporters: [otlp_http/logs]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource_detection, resource/xscaler_agent, batch]
+      exporters: [otlp_http/traces]

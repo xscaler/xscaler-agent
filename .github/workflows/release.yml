@@ -11,6 +11,7 @@ on:
 
 env:
   IMAGE: ghcr.io/xscaler/xscaler-agent
+  COLLECTOR_IMAGE: ghcr.io/xscaler/xscaler-collector
   CHART_DIR: charts/xscaler-agent
   CHART_REGISTRY: oci://ghcr.io/xscaler/charts
 
@@ -57,20 +58,43 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Legacy images from legacy/Dockerfile, published until every install
+          # path has moved to xscaler-collector.
           - flavour: default
             target: default
+            file: legacy/Dockerfile
+            image: ghcr.io/xscaler/xscaler-agent
             platform: linux/amd64
             runner: ubuntu-24.04
           - flavour: default
             target: default
+            file: legacy/Dockerfile
+            image: ghcr.io/xscaler/xscaler-agent
             platform: linux/arm64
             runner: ubuntu-24.04-arm
           - flavour: ebpf
             target: ebpf
+            file: legacy/Dockerfile
+            image: ghcr.io/xscaler/xscaler-agent
             platform: linux/amd64
             runner: ubuntu-24.04
           - flavour: ebpf
             target: ebpf
+            file: legacy/Dockerfile
+            image: ghcr.io/xscaler/xscaler-agent
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          # xscaler-collector: the one image for every role.
+          - flavour: collector
+            target: image
+            file: Dockerfile
+            image: ghcr.io/xscaler/xscaler-collector
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - flavour: collector
+            target: image
+            file: Dockerfile
+            image: ghcr.io/xscaler/xscaler-collector
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
@@ -98,10 +122,15 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
+          # Repository root for every image: the legacy Dockerfile also
+          # copies processor/ (the in-repo xscaler_policy processor).
           context: .
+          file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.flavour }}-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.flavour }}-${{ matrix.platform }}
 
@@ -124,7 +153,7 @@ jobs:
     needs: [version, build]
     strategy:
       matrix:
-        flavour: [default, ebpf]
+        flavour: [default, ebpf, collector]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -145,17 +174,27 @@ jobs:
 
       - name: Compute tags
         id: tags
-        # default flavour -> :<version> + :latest ; ebpf flavour -> :<version>-ebpf
+        # default -> xscaler-agent:<version> + :latest
+        # ebpf      -> xscaler-agent:<version>-ebpf
+        # collector -> xscaler-collector:<version> + :latest
         env:
           version: ${{ needs.version.outputs.version }}
+          flavour: ${{ matrix.flavour }}
         run: |
-          if [ "${{ matrix.flavour }}" = "default" ]; then
-            echo "args=-t ${IMAGE}:${version} -t ${IMAGE}:latest" >> "$GITHUB_OUTPUT"
-            echo "ref=${IMAGE}:${version}" >> "$GITHUB_OUTPUT"
-          else
-            echo "args=-t ${IMAGE}:${version}-ebpf" >> "$GITHUB_OUTPUT"
-            echo "ref=${IMAGE}:${version}-ebpf" >> "$GITHUB_OUTPUT"
-          fi
+          case "$flavour" in
+            default)
+              echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+              echo "args=-t ${IMAGE}:${version} -t ${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+              echo "ref=${IMAGE}:${version}" >> "$GITHUB_OUTPUT" ;;
+            ebpf)
+              echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+              echo "args=-t ${IMAGE}:${version}-ebpf" >> "$GITHUB_OUTPUT"
+              echo "ref=${IMAGE}:${version}-ebpf" >> "$GITHUB_OUTPUT" ;;
+            collector)
+              echo "image=${COLLECTOR_IMAGE}" >> "$GITHUB_OUTPUT"
+              echo "args=-t ${COLLECTOR_IMAGE}:${version} -t ${COLLECTOR_IMAGE}:latest" >> "$GITHUB_OUTPUT"
+              echo "ref=${COLLECTOR_IMAGE}:${version}" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
@@ -163,7 +202,7 @@ jobs:
           # Word-splitting is intentional: each digest becomes a separate arg.
           # shellcheck disable=SC2046
           docker buildx imagetools create ${{ steps.tags.outputs.args }} \
-            $(printf "${IMAGE}@sha256:%s " *)
+            $(printf "${{ steps.tags.outputs.image }}@sha256:%s " *)
 
       - name: Inspect
         run: docker buildx imagetools inspect ${{ steps.tags.outputs.ref }}
@@ -205,3 +244,17 @@ jobs:
             --app-version "${version}" \
             --destination dist
           helm push "dist/xscaler-agent-${version}.tgz" "${CHART_REGISTRY}"
+
+  collector:
+    # Binaries, packages, MSIs and the apt/yum repository for the same tag.
+    # A tag pushed with GITHUB_TOKEN starts no workflow, so call it here.
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/collector-release.yml
+    with:
+      tag: v${{ needs.version.outputs.version }}
+    secrets: inherit

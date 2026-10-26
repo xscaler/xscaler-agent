@@ -50,9 +50,22 @@ nodeAgent:
   # mount is needed.
   hostPaths:
     varLog: /var/log
+    # Docker-runtime nodes (cri-dockerd: minikube, OrbStack, older clusters)
+    # make /var/log/pods/*/*/*.log symlinks into the Docker data dir, which
+    # then has to be mounted too. Set to /var/lib/docker/containers there.
+    # containerd and CRI-O nodes (EKS, GKE, AKS) write the files in place.
+    dockerContainers: ""
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 512Mi }
+  # Container logs under /var/log/pods are root-owned and not world-readable,
+  # so the image's default uid 10001 reads none of them. Root here, nothing
+  # more: the runtime's default capabilities, no privilege escalation, and the
+  # host paths mounted read-only. (The eBPF path sets its own securityContext.)
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    allowPrivilegeEscalation: false
   tolerations:
     - operator: Exists   # run on every node incl. control-plane/tainted
   # Keep the node agent from being evicted under node pressure — a telemetry

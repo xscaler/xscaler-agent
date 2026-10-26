@@ -56,6 +56,11 @@ spec:
             capabilities:
               add: [BPF, PERFMON, SYS_ADMIN, SYS_PTRACE, NET_RAW, DAC_READ_SEARCH, CHECKPOINT_RESTORE]
             {{- end }}
+          {{- else }}
+          {{- with .Values.nodeAgent.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- end }}
           {{- $traces := .Values.nodeAgent.traces | default dict }}
           {{- if and $traces.enabled (eq ($traces.expose | default "service") "hostPort") }}
@@ -101,6 +106,9 @@ spec:
             - { name: config, mountPath: /etc/supervisor }
             - { name: storage, mountPath: {{ .Values.storageDir | quote }} }
             - { name: varlog, mountPath: {{ .Values.nodeAgent.hostPaths.varLog | quote }}, readOnly: true }
+            {{- with .Values.nodeAgent.hostPaths.dockerContainers }}
+            - { name: dockercontainers, mountPath: {{ . | quote }}, readOnly: true }
+            {{- end }}
             {{- if .Values.nodeAgent.ebpf.enabled }}
             - { name: sys, mountPath: /sys, readOnly: true }
             - { name: hostproc, mountPath: /host/proc, readOnly: true }
@@ -117,6 +125,10 @@ spec:
           emptyDir: {}
         - name: varlog
           hostPath: { path: {{ .Values.nodeAgent.hostPaths.varLog | quote }} }
+        {{- with .Values.nodeAgent.hostPaths.dockerContainers }}
+        - name: dockercontainers
+          hostPath: { path: {{ . | quote }} }
+        {{- end }}
         {{- if .Values.nodeAgent.ebpf.enabled }}
         - name: sys
           hostPath: { path: /sys }

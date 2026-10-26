@@ -1,0 +1,109 @@
+# Database receivers, keyed the way client spans key the same database.
+#
+# The service graph draws a database node from client spans: db.system.name
+# (stable semconv, what OBI and current SDKs emit), db.system (older SDKs),
+# server.address and server.port. Each receiver below gets those same four
+# resource attributes, so the database node joins to its receiver metrics.
+#
+# server.address has to be the name the applications dial: point `endpoint`
+# at the Kubernetes Service DNS name (or host name) apps use, not an IP, and
+# the receiver's own server.address/server.port resource attributes then match
+# the spans. Redis turns them off by default; they are switched on below.
+#
+# Merge with a role config: --config linux-host.yaml --config databases.yaml.
+# Passwords come from env here; a config pushed through agent-api uses
+# ${secret:NAME} references instead, which agent-api renders on push.
+
+receivers:
+  postgresql:
+    endpoint: postgres.example.svc:5432
+    transport: tcp
+    username: otel
+    password: ${env:XSCALER_PG_PASSWORD}
+    databases: [app]
+    collection_interval: 60s
+    tls: { insecure: true }
+  mysql:
+    endpoint: mysql.example.svc:3306
+    username: otel
+    password: ${env:XSCALER_MYSQL_PASSWORD}
+    collection_interval: 60s
+  mongodb:
+    hosts: [{ endpoint: mongodb.example.svc:27017 }]
+    username: otel
+    password: ${env:XSCALER_MONGO_PASSWORD}
+    collection_interval: 60s
+    tls: { insecure: true }
+  redis:
+    endpoint: redis.example.svc:6379
+    collection_interval: 60s
+    resource_attributes:
+      server.address: { enabled: true }
+      server.port: { enabled: true }
+  sql_server:
+    server: mssql.example.svc
+    port: 1433
+    username: otel
+    password: ${env:XSCALER_MSSQL_PASSWORD}
+    collection_interval: 60s
+  oracledb:
+    endpoint: oracle.example.svc:1521
+    service: ORCLPDB1
+    username: otel
+    password: ${env:XSCALER_ORACLE_PASSWORD}
+    collection_interval: 60s
+
+processors:
+  # Values from the semconv db.system.name registry; db.system carries the
+  # older names some SDKs still send (mssql, oracle).
+  resource/db_postgresql:
+    attributes:
+      - { key: db.system.name, value: postgresql, action: upsert }
+      - { key: db.system, value: postgresql, action: upsert }
+  resource/db_mysql:
+    attributes:
+      - { key: db.system.name, value: mysql, action: upsert }
+      - { key: db.system, value: mysql, action: upsert }
+  resource/db_mongodb:
+    attributes:
+      - { key: db.system.name, value: mongodb, action: upsert }
+      - { key: db.system, value: mongodb, action: upsert }
+  resource/db_redis:
+    attributes:
+      - { key: db.system.name, value: redis, action: upsert }
+      - { key: db.system, value: redis, action: upsert }
+  resource/db_sqlserver:
+    attributes:
+      - { key: db.system.name, value: microsoft.sql_server, action: upsert }
+      - { key: db.system, value: mssql, action: upsert }
+  resource/db_oracle:
+    attributes:
+      - { key: db.system.name, value: oracle.db, action: upsert }
+      - { key: db.system, value: oracle, action: upsert }
+
+service:
+  pipelines:
+    metrics/postgresql:
+      receivers: [postgresql]
+      processors: [memory_limiter, resource/db_postgresql, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    metrics/mysql:
+      receivers: [mysql]
+      processors: [memory_limiter, resource/db_mysql, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    metrics/mongodb:
+      receivers: [mongodb]
+      processors: [memory_limiter, resource/db_mongodb, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    metrics/redis:
+      receivers: [redis]
+      processors: [memory_limiter, resource/db_redis, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    metrics/sqlserver:
+      receivers: [sql_server]
+      processors: [memory_limiter, resource/db_sqlserver, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    metrics/oracledb:
+      receivers: [oracledb]
+      processors: [memory_limiter, resource/db_oracle, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]

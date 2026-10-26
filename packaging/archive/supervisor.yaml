@@ -1,0 +1,29 @@
+# OpAMP supervisor config for running xscaler-collector from the release
+# archive. The token, endpoint and agent name come from the environment.
+server:
+  endpoint: ${env:XSCALER_ENDPOINT:-wss://agents.xscalerlabs.com/v1/opamp}
+  headers:
+    Authorization: "Bearer ${env:XSCALER_ENROLLMENT_TOKEN}"
+
+capabilities:
+  accepts_remote_config: true
+  reports_effective_config: true
+  # Do not add reports_remote_config: supervisor 0.163 refuses to start with it.
+  reports_health: true
+  reports_heartbeat: true
+  reports_available_components: true
+
+agent:
+  # .\xscaler-collector.exe on Windows.
+  executable: ./xscaler-collector
+  description:
+    identifying_attributes:
+      service.name: io.opentelemetry.collector
+    non_identifying_attributes:
+      install_method: archive
+      agent_name: ${env:XSCALER_AGENT_NAME:-}
+      # agent-api uses this to offer the collector policy.
+      xscaler.distribution: xscaler-collector
+
+storage:
+  directory: ./state
