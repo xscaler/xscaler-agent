@@ -1,0 +1,36 @@
+# OpAMP supervisor for the xScaler Collector Windows service. The supervisor
+# enrolls with xScaler and runs xscaler-collector.exe with the configuration
+# assigned to this agent's labels.
+#
+# Written by the installer on first install. Upgrades keep this file; to change
+# the token or endpoint, edit it here or rerun the MSI with ENROLLMENT_TOKEN /
+# ENDPOINT. Restart the service after editing:
+#
+#   Restart-Service xscaler-collector
+server:
+  endpoint: "wss://agents.xscalerlabs.com/v1/opamp"
+  headers:
+    Authorization: "Bearer "
+
+capabilities:
+  accepts_remote_config: true
+  reports_effective_config: true
+  # Do not add reports_remote_config: supervisor 0.163 sends remote config
+  # status whenever accepts_remote_config is on and refuses to start with it.
+  reports_health: true
+  reports_heartbeat: true
+  reports_available_components: true
+
+agent:
+  executable: '@INSTALLDIR@\xscaler-collector.exe'
+  description:
+    identifying_attributes:
+      service.name: io.opentelemetry.collector
+    non_identifying_attributes:
+      platform: windows
+      install_method: msi
+      # Add labels here to target configs at this host, for example:
+      # environment: prod
+
+storage:
+  directory: '@STATEDIR@'

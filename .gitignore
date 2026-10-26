@@ -5,6 +5,8 @@ supervisor/
 # Local supervisor configs — these carry a real enrollment token, keep them out
 supervisor.yaml
 *.supervisor.yaml
+# Packaged configs: placeholders only, the token comes from the environment
+!packaging/**/supervisor.yaml
 
 # Vendored subchart archives — fetched by `helm dependency build` from the
 # versions Chart.lock pins, so the tgz files don't belong in git.
@@ -14,3 +16,6 @@ supervisor.yaml
 .DS_Store
 *.swp
 dist/
+
+# Generated sources exported by `--target sources-out` for release builds
+.build/
