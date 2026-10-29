@@ -8,6 +8,8 @@ xscaler-supervisor   the OpenTelemetry OpAMP supervisor that enrolls with
 
 On Linux, prefer the deb/rpm packages (apt/yum repository at
 https://packages.xscalerlabs.com) and on Windows the MSI: both install a service.
+FreeBSD has no package; use this archive (the repository README has a
+FreeBSD section with the components that do nothing there).
 
 To run from this archive, put your enrollment token in the environment and
 start the supervisor from this directory:

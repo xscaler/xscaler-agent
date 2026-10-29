@@ -25,7 +25,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-    goos: [linux, windows, darwin]
+    goos: [linux, windows, darwin, freebsd]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
 
@@ -38,7 +38,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-    goos: [linux, windows, darwin]
+    goos: [linux, windows, darwin, freebsd]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
 
