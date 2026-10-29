@@ -75,7 +75,7 @@ these, or reports one that is not listed.
 
 | Kind | Components |
 | --- | --- |
-| Receivers | `otlp`, `hostmetrics`, `filelog` (with the `container` operator), `journald`, `windowseventlog`, `windows_perf_counters`, `prometheus`, `kubeletstats`, `k8s_cluster`, `k8sobjects`, `k8s_events` (kept for configs pushed to 0.4.x agents), `receiver_creator`, `docker_stats`, `syslog`, `tcp_log`, `udp_log`, `postgresql`, `mysql`, `mongodb`, `redis`, `sqlserver`, `oracledb`, `sqlquery`, `elasticsearch`, `nginx`, `apache`, `rabbitmq`, `kafka_metrics`, `http_check`, `statsd`, `snmp`, `netflow`, `awscloudwatch`, `azuremonitor`, `googlecloudmonitoring`, `obi`, `nop` |
+| Receivers | `otlp`, `hostmetrics`, `filelog` (with the `container` operator), `journald`, `windows_event_log`, `windows_perf_counters`, `prometheus`, `kubeletstats`, `k8s_cluster`, `k8sobjects`, `k8s_events` (kept for configs pushed to 0.4.x agents), `receiver_creator`, `docker_stats`, `syslog`, `tcp_log`, `udp_log`, `postgresql`, `mysql`, `mongodb`, `redis`, `sqlserver`, `oracledb`, `sqlquery`, `elasticsearch`, `nginx`, `apache`, `rabbitmq`, `kafka_metrics`, `http_check`, `statsd`, `snmp`, `netflow`, `awscloudwatch`, `azuremonitor`, `googlecloudmonitoring`, `obi`, `nop` |
 | Processors | `memory_limiter`, `k8sattributes`, `resourcedetection`, `resource`, `attributes`, `transform`, `filter`, `metrics_transform`, `groupbyattrs`, `cumulative_to_delta`, `delta_to_cumulative`, `interval`, `redaction`, `probabilistic_sampler`, `tail_sampling`, `batch`, `xscaler_policy` |
 | Connectors | `forward`, `span_metrics`, `service_graph`, `routing`, `count` |
 | Exporters | `otlp`, `otlphttp`, `debug`, `nop` |
@@ -323,9 +323,8 @@ otherwise two clusters left at the default would derive colliding UIDs. See
 ### Hosts: packages and MSI
 
 Each release publishes `xscaler-collector` as deb and rpm packages, Windows
-MSIs and tar.gz/zip archives for linux, windows, darwin and freebsd on amd64 and
-arm64,
-built from the same sources as the image
+MSIs and tar.gz/zip archives for linux, windows, darwin and freebsd on amd64
+and arm64, built from the same sources as the image
 ([`collector-release.yml`](.github/workflows/collector-release.yml)).
 
 Debian and Ubuntu:
@@ -386,11 +385,11 @@ uses one fails at `validate` with an "only supported on ..." error:
 | Component | Why it does nothing on FreeBSD |
 | --- | --- |
 | `journald` | no systemd journal |
-| `windowseventlog`, `windows_perf_counters` | Windows only |
+| `windows_event_log`, `windows_perf_counters` | Windows only |
 | `obi` | Linux eBPF (amd64 and arm64) only |
 
 The Kubernetes receivers and processors (`k8s_cluster`, `k8s_objects`,
-`k8s_events`, `kubeletstats`, `k8sattributes`, the leader elector and observer)
+`k8s_events`, `kubelet_stats`, `k8s_attributes`, the leader elector and observer)
 compile, but need a cluster to talk to.
 
 `host_metrics` works with the `cpu`, `memory`, `load`, `filesystem`, `network`,
