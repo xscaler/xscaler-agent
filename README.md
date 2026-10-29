@@ -207,9 +207,11 @@ limit, so the limiter never fired before the kernel OOM-killed the pod.
 
 ### Chart
 
-Setting `image.repository=ghcr.io/xscaler/xscaler-collector` switches the chart
-to this image. The chart then uses one tag for every role (OBI is in every
-build) and leaves `reports_remote_config` out of the supervisor config: the
+The chart installs `ghcr.io/xscaler/xscaler-collector` by default
+(`image.repository`). An empty `image.tag` resolves to the chart's `appVersion`,
+which the release workflow publishes for this image. The chart uses one tag for
+every role (OBI is in every build, `nodeAgent.ebpf.enabled` only turns it on)
+and leaves `reports_remote_config` out of the supervisor config: the
 0.163 supervisor refuses to start with it, while the 0.151 supervisor in the
 legacy images needs it to report config status. Both report
 `reports_available_components` and `k8s.cluster.name`, which agent-api records
@@ -218,6 +220,17 @@ in its collector inventory together with role, version and host.
 The xscaler-collector image also reports `xscaler.distribution:
 xscaler-collector`, which agent-api uses to offer the collector policy
 (the `xscaler_policy` processor). That needs xscaler-collector 0.6.0 or newer.
+
+To stay on the legacy image, override the repository:
+
+```sh
+helm install xscaler charts/xscaler-agent \
+  --set enrollmentToken=xse_... \
+  --set image.repository=ghcr.io/xscaler/xscaler-agent
+```
+
+The chart then keeps `reports_remote_config`, omits `xscaler.distribution`, and
+the node agent uses `<tag>-ebpf` when `nodeAgent.ebpf.enabled` is true.
 
 ### Images
 
@@ -452,7 +465,7 @@ needs no `helm repo add` and no network to prometheus-community, whether or not
 you enable it:
 
 ```sh
-helm install xscaler oci://ghcr.io/xscaler/charts/xscaler-agent --version 0.4.0 \
+helm install xscaler oci://ghcr.io/xscaler/charts/xscaler-agent --version 0.7.0 \
   --set enrollmentToken=xse_... \
   --set kube-state-metrics.enabled=true
 ```
