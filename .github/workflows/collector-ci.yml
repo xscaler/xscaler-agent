@@ -137,6 +137,79 @@ jobs:
       - name: Supervisor runs
         run: dist/opampsupervisor.exe --help 2>&1 | head -3
 
+  freebsd:
+    # Boot the freebsd/amd64 binary in a FreeBSD VM (KVM on the runner).
+    needs: cross
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: xscaler-collector-freebsd-amd64
+          path: dist
+      - run: chmod +x dist/xscaler-collector
+      - name: Run in FreeBSD 14
+        uses: vmactions/freebsd-vm@v1.5.9
+        with:
+          release: "14.3"
+          arch: x86_64
+          usesh: true
+          run: |
+            set -eu
+            bin="$PWD/dist/xscaler-collector"
+            echo "== version"
+            "$bin" --version
+
+            echo "== components"
+            grep -vE '^[[:space:]]*(#|$)' scripts/expected-components.txt | sort -u >/tmp/expected
+            "$bin" components | awk '
+              /^[a-z]+:/ { kind = $1; sub(":", "", kind); next }
+              kind ~ /^(receivers|processors|exporters|extensions|connectors|providers)$/ &&
+                $1 == "-" && $2 == "name:" { print kind, $3 }
+              kind ~ /^(receivers|processors|exporters|extensions|connectors|providers)$/ &&
+                $1 == "-" && $2 == "scheme:" { print kind, $3 }
+            ' | sort -u >/tmp/actual
+            if ! diff /tmp/expected /tmp/actual; then
+              echo "components MISMATCH"
+              exit 1
+            fi
+            echo "components OK: $(wc -l </tmp/actual | tr -d ' ') match"
+
+            echo "== validate freebsd-host.yaml"
+            sed 's/\${xscaler:agent_id}/00000000-0000-0000-0000-000000000000/g' \
+              examples/freebsd-host.yaml >/tmp/freebsd-host.yaml
+            export XSCALER_TENANT_ID=ci XSCALER_TOKEN=ci
+            export XSCALER_METRICS_ENDPOINT=https://ingest.example.invalid/otlp/v1/metrics
+            export XSCALER_LOGS_ENDPOINT=https://ingest.example.invalid/otlp/v1/logs
+            export XSCALER_TRACES_ENDPOINT=https://ingest.example.invalid/otlp/v1/traces
+            export XSCALER_QUEUE_DIR=/tmp/xscaler-validate-queue
+            "$bin" validate --config /tmp/freebsd-host.yaml
+            echo "validate OK"
+
+            echo "== host_metrics run"
+            cat >/tmp/run.yaml <<'CFG'
+            receivers:
+              host_metrics:
+                collection_interval: 5s
+                scrapers: { cpu: {}, memory: {} }
+            exporters:
+              debug:
+                verbosity: detailed
+            service:
+              pipelines:
+                metrics:
+                  receivers: [host_metrics]
+                  exporters: [debug]
+            CFG
+            timeout 30 "$bin" --config /tmp/run.yaml >/tmp/run.log 2>&1 || true
+            if ! grep -qE 'Name: system\.cpu' /tmp/run.log; then
+              echo "no system.cpu metric in output"
+              tail -50 /tmp/run.log
+              exit 1
+            fi
+            grep -E 'Name: system\.cpu' /tmp/run.log | head -3
+            echo "metrics OK"
+
   image:
     needs: linux
     runs-on: ubuntu-24.04
