@@ -1,6 +1,17 @@
 # Default values for xscaler-agent.
+# The default is the xscaler-collector image: one image for every role, with the
+# OBI eBPF receiver and the xscaler_policy processor in every build. An empty
+# tag resolves to the chart's appVersion, which the release workflow publishes
+# for both images.
+#
+# To stay on the legacy image (upstream 0.151 supervisor + contrib, eBPF only
+# in the `<tag>-ebpf` variant), set:
+#   image:
+#     repository: ghcr.io/xscaler/xscaler-agent
+# The chart then keeps `reports_remote_config` in the supervisor config and
+# uses the `-ebpf` tag on the node agent when nodeAgent.ebpf.enabled is true.
 image:
-  repository: ghcr.io/xscaler/xscaler-agent
+  repository: ghcr.io/xscaler/xscaler-collector
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -73,10 +84,11 @@ nodeAgent:
   # system-node-critical (a built-in PriorityClass) in production.
   priorityClassName: ""
   # ---- eBPF (OBI) zero-code network + application instrumentation ------------
-  # Requires a custom agent image built with the OBI collector receiver (not in
-  # stock otelcol-contrib), and grants the DaemonSet elevated kernel privileges
-  # for eBPF. Off by default. The `obi` receiver/pipelines still arrive as a
-  # pushed OpAMP config — this only opens the host-level access it needs.
+  # OBI is in every xscaler-collector build, so this only turns it on: it grants
+  # the DaemonSet the elevated kernel privileges eBPF needs. On the legacy
+  # xscaler-agent image the node agent also switches to the `<tag>-ebpf` image
+  # variant. Off by default. The `obi` receiver/pipelines still arrive as a
+  # pushed OpAMP config; this only opens the host-level access it needs.
   ebpf:
     enabled: false
     # privileged: true is the simplest grant; set false to use the scoped

@@ -134,7 +134,11 @@ capabilities:
   reports_available_components: true
 
 agent:
+  {{- if include "xscaler-agent.collectorImage" $ctx }}
+  executable: /usr/local/bin/xscaler-collector
+  {{- else }}
   executable: /usr/local/bin/otelcol-contrib
+  {{- end }}
   description:
     identifying_attributes:
       service.name: io.opentelemetry.collector
