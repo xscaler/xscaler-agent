@@ -75,7 +75,7 @@ these, or reports one that is not listed.
 
 | Kind | Components |
 | --- | --- |
-| Receivers | `otlp`, `hostmetrics`, `filelog` (with the `container` operator), `journald`, `windowseventlog`, `windows_perf_counters`, `prometheus`, `kubeletstats`, `k8s_cluster`, `k8sobjects`, `k8s_events` (kept for configs pushed to 0.4.x agents), `receiver_creator`, `docker_stats`, `syslog`, `tcp_log`, `udp_log`, `postgresql`, `mysql`, `mongodb`, `redis`, `sqlserver`, `oracledb`, `sqlquery`, `elasticsearch`, `nginx`, `apache`, `rabbitmq`, `kafka_metrics`, `http_check`, `statsd`, `snmp`, `netflow`, `awscloudwatch`, `azuremonitor`, `googlecloudmonitoring`, `obi`, `nop` |
+| Receivers | `otlp`, `hostmetrics`, `filelog` (with the `container` operator), `journald`, `windows_event_log`, `windows_perf_counters`, `prometheus`, `kubeletstats`, `k8s_cluster`, `k8sobjects`, `k8s_events` (kept for configs pushed to 0.4.x agents), `receiver_creator`, `docker_stats`, `syslog`, `tcp_log`, `udp_log`, `postgresql`, `mysql`, `mongodb`, `redis`, `sqlserver`, `oracledb`, `sqlquery`, `elasticsearch`, `nginx`, `apache`, `rabbitmq`, `kafka_metrics`, `http_check`, `statsd`, `snmp`, `netflow`, `awscloudwatch`, `azuremonitor`, `googlecloudmonitoring`, `obi`, `nop` |
 | Processors | `memory_limiter`, `k8sattributes`, `resourcedetection`, `resource`, `attributes`, `transform`, `filter`, `metrics_transform`, `groupbyattrs`, `cumulative_to_delta`, `delta_to_cumulative`, `interval`, `redaction`, `probabilistic_sampler`, `tail_sampling`, `batch`, `xscaler_policy` |
 | Connectors | `forward`, `span_metrics`, `service_graph`, `routing`, `count` |
 | Exporters | `otlp`, `otlphttp`, `debug`, `nop` |
@@ -144,8 +144,8 @@ The smoke test sends OTLP logs while the exporter's endpoint is down, stops the
 collector, brings up a sink, restarts the collector on the same `file_storage`
 directory and passes only when every record queued before the restart reaches
 the sink. [`collector-ci.yml`](.github/workflows/collector-ci.yml) runs all five
-on native amd64 and arm64 runners, cross-compiles Windows and macOS, and builds
-the multi-arch image.
+on native amd64 and arm64 runners, cross-compiles Windows, macOS and FreeBSD,
+and builds the multi-arch image.
 
 ### Service identity
 
@@ -197,6 +197,7 @@ memory limiter below the container limit, put every exporter's sending queue on
 | `cluster-deployment.yaml` | `k8s_cluster`, Warnings and Deployment/ReplicaSet change events, one active replica via `k8s_leader_elector` |
 | `linux-host.yaml` | host metrics, `/var/log`, the journal (service from the systemd unit), local OTLP |
 | `windows-host.yaml` | host metrics, Application and System event logs, local OTLP |
+| `freebsd-host.yaml` | host metrics, `/var/log`, local OTLP; no journal |
 | `databases.yaml` | every database receiver with `db.system.name`, `db.system`, `server.address`, `server.port`; merge with a role config |
 
 In containers the limiter uses `limit_percentage: 80` and
@@ -322,8 +323,8 @@ otherwise two clusters left at the default would derive colliding UIDs. See
 ### Hosts: packages and MSI
 
 Each release publishes `xscaler-collector` as deb and rpm packages, Windows
-MSIs and tar.gz/zip archives for linux, windows and darwin on amd64 and arm64,
-built from the same sources as the image
+MSIs and tar.gz/zip archives for linux, windows, darwin and freebsd on amd64
+and arm64, built from the same sources as the image
 ([`collector-release.yml`](.github/workflows/collector-release.yml)).
 
 Debian and Ubuntu:
@@ -371,6 +372,53 @@ Installing the package stops and disables `otelcol-contrib.service` and the
 `opampsupervisor.service` written by `get-xscaler/install.sh`, so a host never
 runs two agents. eBPF instrumentation: link the drop-in as described at the
 top of `ebpf.conf`.
+
+#### FreeBSD
+
+FreeBSD on amd64 and arm64 gets the tar.gz archive only: no
+package, no rc.d script. It is the same manifest as every other platform,
+built with `CGO_ENABLED=0`, so `xscaler-collector components` lists the same 78
+components as on Linux (`scripts/check-components.sh` applies to it unchanged).
+Four of them are in the binary but refuse to start on FreeBSD; a config that
+uses one fails at `validate` with an "only supported on ..." error:
+
+| Component | Why it does nothing on FreeBSD |
+| --- | --- |
+| `journald` | no systemd journal |
+| `windows_event_log`, `windows_perf_counters` | Windows only |
+| `obi` | Linux eBPF (amd64 and arm64) only |
+
+The Kubernetes receivers and processors (`k8s_cluster`, `k8s_objects`,
+`k8s_events`, `kubelet_stats`, `k8s_attributes`, the leader elector and observer)
+compile, but need a cluster to talk to.
+
+`host_metrics` works with the `cpu`, `memory`, `load`, `filesystem`, `network`,
+`disk`, `paging` and `processes` scrapers. `system.network.connections` runs
+`lsof`, which the base system lacks, so the scraper logs an error every
+interval; turn the metric off or `pkg install lsof`. See
+[`examples/freebsd-host.yaml`](examples/freebsd-host.yaml).
+
+```sh
+fetch https://github.com/xscaler/xscaler-agent/releases/download/v<version>/xscaler-collector_<version>_freebsd_amd64.tar.gz
+tar xzf xscaler-collector_<version>_freebsd_amd64.tar.gz
+cd xscaler-collector_<version>_freebsd_amd64
+mkdir -p state
+```
+
+Run it under the supervisor from that directory. `config/supervisor.yaml`
+already points at `./xscaler-collector` and `./state`:
+
+```sh
+export XSCALER_ENROLLMENT_TOKEN=xse_...
+daemon -f -p /var/run/xscaler-supervisor.pid -o /var/log/xscaler-supervisor.log \
+  ./xscaler-supervisor --config config/supervisor.yaml
+```
+
+The arm64 build was run by hand on FreeBSD 14.5 under QEMU: `components`,
+`validate`, a 60 second run with host metrics and `/var/log/messages` records
+reaching the debug exporter, and the supervisor enrolling with agent-api and
+starting the collector. CI cross-compiles both architectures and does not run
+them.
 
 Windows, silent install (service `xscaler-collector`, binaries in
 `C:\Program Files\xScaler Collector`):

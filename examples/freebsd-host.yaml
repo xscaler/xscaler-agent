@@ -1,0 +1,88 @@
+# FreeBSD host (VM or bare metal): host metrics, /var/log files and local
+# OTLP. Run from the freebsd tarball under xscaler-supervisor.
+#
+# Left out on purpose: journald (no journalctl on FreeBSD), windows_event_log,
+# windows_perf_counters, obi (Linux eBPF) and the k8s_* receivers. They are
+# in the binary but fail to start here if a config uses them.
+#
+# system.network.connections is off: FreeBSD reads TCP connections by running
+# lsof, which the base system does not have (pkg install lsof to enable it).
+#
+# Env: XSCALER_{METRICS,LOGS,TRACES}_ENDPOINT, XSCALER_TOKEN, XSCALER_TENANT_ID.
+
+extensions:
+  health_check: { endpoint: "127.0.0.1:13133" }
+  file_storage:
+    directory: ${env:XSCALER_QUEUE_DIR:-/var/db/xscaler-collector/queue}
+    create_directory: true
+    timeout: 1s
+
+receivers:
+  otlp:
+    protocols:
+      grpc: { endpoint: "127.0.0.1:4317" }
+      http: { endpoint: "127.0.0.1:4318" }
+  host_metrics:
+    collection_interval: 60s
+    scrapers: { cpu: {}, memory: {}, load: {}, filesystem: {}, network: { metrics: { system.network.connections: { enabled: false } } }, disk: {}, paging: {} }
+  file_log:
+    include: [/var/log/messages, /var/log/*.log]
+    include_file_path: true
+    start_at: end
+    storage: file_storage
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  resource_detection:
+    detectors: [env, system]
+    timeout: 5s
+    override: false
+    system:
+      hostname_sources: [os, dns]
+  resource/xscaler_agent:
+    attributes:
+      - { key: xscaler.agent.id, value: "${xscaler:agent_id}", action: upsert }
+      - { key: xscaler.agent.profile, value: freebsd_host, action: upsert }
+  batch: { timeout: 5s, send_batch_size: 512 }
+
+exporters:
+  otlp_http/metrics:
+    metrics_endpoint: ${env:XSCALER_METRICS_ENDPOINT}
+    headers: &auth
+      Authorization: "Bearer ${env:XSCALER_TOKEN}"
+      X-Scope-OrgID: "${env:XSCALER_TENANT_ID}"
+    sending_queue: &queue
+      enabled: true
+      storage: file_storage
+    retry_on_failure: &retry
+      enabled: true
+      max_elapsed_time: 0
+  otlp_http/logs:
+    logs_endpoint: ${env:XSCALER_LOGS_ENDPOINT}
+    headers: *auth
+    sending_queue: *queue
+    retry_on_failure: *retry
+  otlp_http/traces:
+    traces_endpoint: ${env:XSCALER_TRACES_ENDPOINT}
+    headers: *auth
+    sending_queue: *queue
+    retry_on_failure: *retry
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    metrics:
+      receivers: [host_metrics, otlp]
+      processors: [memory_limiter, resource_detection, resource/xscaler_agent, batch]
+      exporters: [otlp_http/metrics]
+    logs:
+      receivers: [file_log, otlp]
+      processors: [memory_limiter, resource_detection, resource/xscaler_agent, batch]
+      exporters: [otlp_http/logs]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource_detection, resource/xscaler_agent, batch]
+      exporters: [otlp_http/traces]
