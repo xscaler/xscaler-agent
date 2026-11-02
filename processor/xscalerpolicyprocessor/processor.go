@@ -210,12 +210,42 @@ func isPlaceholder(name string, placeholders []string) bool {
 }
 
 func matchAny(res []*regexp.Regexp, name string) bool {
+	prom := promName(name)
 	for _, re := range res {
-		if re.MatchString(name) {
+		if matchName(re, name, prom) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchName reports whether a policy pattern matches a metric by its OTLP
+// name or by the name Mimir stores it under. People write policy from what
+// they see in Metrics, so k8s_pod_cpu_usage has to match k8s.pod.cpu.usage.
+func matchName(re *regexp.Regexp, name, prom string) bool {
+	return re.MatchString(name) || (prom != name && re.MatchString(prom))
+}
+
+// promName is the Prometheus name Mimir gives an OTLP metric with suffixes
+// off (otlptranslator, underscore escaping): every run of characters outside
+// [a-zA-Z0-9_:] becomes one underscore, and a leading digit gets an
+// underscore in front. A name the translation would reject comes back as is.
+func promName(name string) string {
+	out := name
+	if strings.IndexFunc(name, invalidPromRune) >= 0 {
+		out = strings.Join(strings.FieldsFunc(name, invalidPromRune), "_")
+		if strings.Trim(out, "_") == "" {
+			return name
+		}
+	}
+	if out != "" && out[0] >= '0' && out[0] <= '9' {
+		out = "_" + out
+	}
+	return out
+}
+
+func invalidPromRune(r rune) bool {
+	return r != '_' && r != ':' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9')
 }
 
 func (p *policyProcessor) applyDrops(ctx context.Context, md pmetric.Metrics) {
@@ -243,8 +273,9 @@ func (p *policyProcessor) applyDrops(ctx context.Context, md pmetric.Metrics) {
 }
 
 func (p *policyProcessor) aggRuleFor(name string) *aggRule {
+	prom := promName(name)
 	for i := range p.aggs {
-		if p.aggs[i].match.MatchString(name) {
+		if matchName(p.aggs[i].match, name, prom) {
 			return &p.aggs[i]
 		}
 	}
@@ -405,8 +436,9 @@ func metricKey(m pmetric.Metric) uint64 {
 }
 
 func (p *policyProcessor) limitFor(name string) int {
+	prom := promName(name)
 	for _, l := range p.limits {
-		if l.match.MatchString(name) {
+		if matchName(l.match, name, prom) {
 			return l.max
 		}
 	}

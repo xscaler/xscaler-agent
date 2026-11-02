@@ -41,7 +41,8 @@ type Config struct {
 }
 
 // DropRule matches metric names. Metric is a glob (`*` and `?`) unless it
-// starts with "regex:", in which case the rest is a full-match regexp.
+// starts with "regex:", in which case the rest is a full-match regexp. Every
+// pattern is tried against the OTLP name and the stored Prometheus name.
 type DropRule struct {
 	Metric string `mapstructure:"metric"`
 }
