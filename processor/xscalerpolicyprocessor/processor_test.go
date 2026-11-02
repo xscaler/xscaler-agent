@@ -140,6 +140,48 @@ func TestDrops(t *testing.T) {
 	assert.Equal(t, 1, out.ResourceMetrics().Len(), "empty resources are pruned")
 }
 
+func TestPromName(t *testing.T) {
+	for in, want := range map[string]string{
+		"k8s.pod.cpu.usage":        "k8s_pod_cpu_usage",
+		"go_gc_duration_seconds":   "go_gc_duration_seconds",
+		"http.server.request.size": "http_server_request_size",
+		"a..b/c-d":                 "a_b_c_d",
+		".leading.dot":             "leading_dot",
+		"_private.metric":          "_private_metric",
+		"2xx.responses":            "_2xx_responses",
+		"ns:rule":                  "ns:rule",
+		"métrique.total":           "m_trique_total",
+		"...":                      "...",
+	} {
+		assert.Equal(t, want, promName(in), in)
+	}
+}
+
+func TestPolicyMatchesOTLPAndPrometheusNames(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Drops = []DropRule{{Metric: "k8s_pod_filesystem_*"}, {Metric: "k8s.node.network.*"}}
+	cfg.Aggregations = []AggregationRule{{Metric: "k8s_pod_memory_working_set", DropAttributes: []string{"k8s.pod.name"}}}
+	cfg.Cardinality.Limits = []CardinalityLimit{{Metric: "regex:http_server_.*", MaxSeries: 7}}
+	p := newTestProcessor(t, cfg)
+
+	md := pmetric.NewMetrics()
+	res := map[string]string{"service.name": "a"}
+	addSum(md, res, "k8s.pod.filesystem.usage", nil, 1, 10)
+	addSum(md, res, "k8s.node.network.io", nil, 1, 10)
+	addSum(md, res, "k8s.pod.cpu.usage", nil, 1, 10)
+	out, err := p.processMetrics(context.Background(), md)
+	require.NoError(t, err)
+	got := collectMetrics(out)
+	assert.NotContains(t, got, "k8s.pod.filesystem.usage", "underscore glob matches the stored name")
+	assert.NotContains(t, got, "k8s.node.network.io", "dotted glob matches the OTLP name")
+	assert.Contains(t, got, "k8s.pod.cpu.usage")
+
+	assert.NotNil(t, p.aggRuleFor("k8s.pod.memory.working_set"))
+	assert.Nil(t, p.aggRuleFor("k8s.pod.memory.usage"))
+	assert.Equal(t, 7, p.limitFor("http.server.request.duration"))
+	assert.Equal(t, 0, p.limitFor("rpc.server.duration"))
+}
+
 func TestServiceIdentity(t *testing.T) {
 	cfg := baseConfig()
 	cfg.ServiceIdentity.Enabled = true

@@ -216,6 +216,11 @@ only these fields.
   literal, matched against the whole name) unless prefixed with `regex:`,
   in which case the rest must compile as an RE2 regexp and is anchored to
   the whole name.
+- **Names match in either form.** A pattern is tried against the OTLP name
+  (`k8s.pod.cpu.usage`) and the name it is stored and queried under
+  (`k8s_pod_cpu_usage`: every run of characters outside `[a-zA-Z0-9_:]`
+  becomes one `_`, no unit suffixes). A rule copied from Metrics matches
+  the metric the collector sees.
 - **Durations** are Go duration strings (`90s`, `10m`, `1h`). A bare
   integer decodes as nanoseconds.
 - **Types are strict.** The collector does no weak conversion: unquoted

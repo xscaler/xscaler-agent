@@ -70,6 +70,9 @@ jobs:
       - name: Service identity rules (service.name / namespace / version, agent id)
         run: scripts/service-identity-test.sh dist/xscaler-collector
 
+      - name: Policy rules match stored metric names
+        run: scripts/policy-names-test.sh dist/xscaler-collector
+
       - name: Smoke test (persistent file_storage queue across a restart)
         run: scripts/smoke-test.sh dist/xscaler-collector
 
