@@ -144,6 +144,6 @@ providers:
 
 replaces:
   # OBI's eBPF objects are generated (bpf2go) and not in the published module,
-  # so the build runs OBI's own `make generate` on the v0.15.2 tag and points
+  # so the build runs OBI's own `make generate` on the v1.0.0 tag and points
   # the module at that tree. Unmodified upstream source; not a fork.
   - go.opentelemetry.io/obi => /src/obi
