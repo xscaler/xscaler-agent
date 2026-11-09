@@ -40,13 +40,20 @@ upstream PR. There are none today.
 | `OTEL_VERSION` | `0.163.0` | every contrib module, core beta modules, OCB, the supervisor |
 | `OTEL_STABLE_VERSION` | `1.69.0` | core stable modules (confmap providers) |
 | `CONTRIB_STABLE_VERSION` | `1.2.0` | contrib's stable-base set (k8sattributes) |
-| `OBI_VERSION` | `0.15.2` | the `obi` receiver and its eBPF sources |
+| `OBI_VERSION` | `1.0.0` | OBI core and its eBPF sources (the generated tree) |
+| `OBI_COLLECTOR_VERSION` | `0.15.2` | the `obi` receiver module, `go.opentelemetry.io/obi/collector` |
 | `OBI_GENERATOR_VERSION` | `0.2.17` | the image OBI's `make generate` runs in |
 
 0.163.0 is the newest release where core, contrib and OBI line up: OBI
-v0.15.2's `collector/go.mod` requires core `v0.163.0` / pdata `v1.69.0`, which
-is exactly core v0.163.0 (v0.162.0 ships pdata v1.68.0). OBI v1.0.0-rc.2 builds
-against the same core but is a release candidate; move to 1.0.0 once it is GA.
+v1.0.0's `collector/go.mod` requires core `v0.163.0` / pdata `v1.69.0`, which
+is exactly core v0.163.0 (v0.162.0 ships pdata v1.68.0). Core v0.164.0 is out,
+but no OBI release builds against it yet.
+
+OBI versions its core and its collector receiver separately. 1.0.0 tagged
+only core; the receiver stays on its v0 line, and OBI's release notes pair
+core v1.0.0 with `collector/v0.15.2`. `builder.yaml` pulls the receiver at
+`OBI_COLLECTOR_VERSION`, and its `replaces:` line swaps in the core tree
+generated at `OBI_VERSION`.
 
 [`scripts/check-pins.sh`](scripts/check-pins.sh) fails CI when any module in
 `builder.yaml` or any `ARG` default in the `Dockerfile` differs from
@@ -60,7 +67,9 @@ generate tree or our fork.
    `versions.yaml` at the same tag gives `CONTRIB_STABLE_VERSION` and the
    modules in its stable-base set.
 2. Find the OBI release whose `collector/go.mod` requires that core version.
-   If none does yet, stay on the current pin: OBI sets the ceiling.
+   If none does yet, stay on the current pin: OBI sets the ceiling. Its
+   release notes name the receiver tag to pair it with
+   (`OBI_COLLECTOR_VERSION`).
 3. Set `OBI_GENERATOR_VERSION` to `GEN_IMG` in OBI's Makefile at that tag.
 4. Update `versions.env`, then every version in `builder.yaml` and the `ARG`
    defaults in the `Dockerfile`. Run `scripts/check-pins.sh`.

@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>xscaler_policy Processor Flow</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one narrow reading column; each diagram sits in its own scrollable figure */
+:root {
+  --bg: #f6f8f9;
+  --surface: #ffffff;
+  --fg: #16232b;
+  --muted: #5b6b75;
+  --line: #c9d3d9;
+  --accent: #0f6f83;
+  --accent-soft: #dcEEF2;
+  --warn: #a35a00;
+  --warn-soft: #fbecd6;
+  --drop: #a8323a;
+  --drop-soft: #f8e0e2;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f171c; --surface: #16222a; --fg: #e3ebef; --muted: #93a4ad; --line: #2e3e48;
+    --accent: #5cc3d6; --accent-soft: #163640; --warn: #f0a94b; --warn-soft: #3a2a14;
+    --drop: #f07d84; --drop-soft: #3a1b1f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f171c; --surface: #16222a; --fg: #e3ebef; --muted: #93a4ad; --line: #2e3e48;
+  --accent: #5cc3d6; --accent-soft: #163640; --warn: #f0a94b; --warn-soft: #3a2a14;
+  --drop: #f07d84; --drop-soft: #3a1b1f; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+}
+main { max-width: 1000px; margin: 0 auto; display: grid; gap: 44px; }
+header { display: grid; gap: 8px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: 30px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 16px; }
+code { font-family: var(--font-mono); font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+section { display: grid; gap: 14px; }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; padding: 16px; }
+figure svg { display: block; min-width: 760px; width: 100%; height: auto; }
+.notes { display: grid; gap: 6px; padding-left: 18px; margin: 0; max-width: 72ch; }
+.notes li::marker { color: var(--muted); }
+
+/* SVG styling, all from tokens */
+.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.box-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.box-warn { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.5; }
+.box-drop { fill: var(--drop-soft); stroke: var(--drop); stroke-width: 1.5; }
+.frame { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.edge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.edge-accent { fill: none; stroke: var(--accent); stroke-width: 1.8; }
+.edge-warn { fill: none; stroke: var(--warn); stroke-width: 1.8; }
+.edge-drop { fill: none; stroke: var(--drop); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.head { fill: var(--muted); }
+.head-accent { fill: var(--accent); }
+.head-warn { fill: var(--warn); }
+.head-drop { fill: var(--drop); }
+.t { fill: var(--fg); font-family: var(--font-body); font-size: 14px; }
+.tb { fill: var(--fg); font-family: var(--font-body); font-size: 14px; font-weight: 600; }
+.ts { fill: var(--muted); font-family: var(--font-body); font-size: 12px; }
+.tm { fill: var(--fg); font-family: var(--font-mono); font-size: 12px; }
+.tm-muted { fill: var(--muted); font-family: var(--font-mono); font-size: 11.5px; }
+.ta { fill: var(--accent); font-family: var(--font-mono); font-size: 12px; font-weight: 500; }
+.tw { fill: var(--warn); font-family: var(--font-mono); font-size: 12px; font-weight: 500; }
+.td { fill: var(--drop); font-family: var(--font-mono); font-size: 12px; }
+.label { fill: var(--accent); font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; }
+.step-n { fill: var(--accent); font-family: var(--font-mono); font-size: 11px; }
+</style>
+</head>
+<body class="auto">
+<main>
+  <header>
+    <span class="eyebrow">xscaler-agent · PR #15 · follow-up #19</span>
+    <h1>How the xscaler_policy processor shapes metrics</h1>
+    <p class="lede">The portal writes a policy, agent-api pushes it to every collector over OpAMP, and the processor trims metric volume before anything reaches Mimir.</p>
+  </header>
+
+  <section>
+    <h2>Where it runs</h2>
+    <figure>
+      <svg viewBox="0 0 960 320" role="img" aria-label="Portal and agent-api push the policy over OpAMP to the collector, where xscaler_policy runs four steps between receivers and Mimir">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <text class="label" x="20" y="24">CONTROL PLANE</text>
+        <rect class="box" x="190" y="38" width="170" height="54" rx="8"/>
+        <text class="tb" x="275" y="62" text-anchor="middle">xScaler portal</text>
+        <text class="ts" x="275" y="80" text-anchor="middle">validates policy body</text>
+
+        <rect class="box" x="430" y="38" width="170" height="54" rx="8"/>
+        <text class="tb" x="515" y="62" text-anchor="middle">agent-api</text>
+        <text class="ts" x="515" y="80" text-anchor="middle">xscaler#513</text>
+        <path class="edge" d="M360,65 L426,65" marker-end="url(#a1)"/>
+
+        <path class="edge-accent" d="M515,92 L515,146" marker-end="url(#a1a)"/>
+        <text class="ta" x="525" y="124">OpAMP: config layer</text>
+
+        <text class="label" x="20" y="140">COLLECTOR · DATA PLANE</text>
+        <rect class="box" x="20" y="186" width="130" height="70" rx="8"/>
+        <text class="tb" x="85" y="216" text-anchor="middle">Receivers</text>
+        <text class="ts" x="85" y="236" text-anchor="middle">prometheus, OTLP</text>
+        <path class="edge" d="M150,221 L186,221" marker-end="url(#a1)"/>
+
+        <rect class="frame" x="190" y="150" width="570" height="148" rx="10"/>
+        <text class="ta" x="206" y="172">processor: xscaler_policy</text>
+
+        <rect class="box-accent" x="206" y="186" width="124" height="96" rx="7"/>
+        <text class="step-n" x="218" y="206">1</text>
+        <text class="tb" x="268" y="228" text-anchor="middle">Service</text>
+        <text class="tb" x="268" y="246" text-anchor="middle">identity</text>
+        <text class="ts" x="268" y="268" text-anchor="middle">fill service.name</text>
+
+        <rect class="box-drop" x="344" y="186" width="124" height="96" rx="7"/>
+        <text class="step-n" x="356" y="206">2</text>
+        <text class="tb" x="406" y="237" text-anchor="middle">Drops</text>
+        <text class="ts" x="406" y="268" text-anchor="middle">remove metrics</text>
+
+        <rect class="box-accent" x="482" y="186" width="124" height="96" rx="7"/>
+        <text class="step-n" x="494" y="206">3</text>
+        <text class="tb" x="544" y="237" text-anchor="middle">Aggregations</text>
+        <text class="ts" x="544" y="268" text-anchor="middle">drop labels, merge</text>
+
+        <rect class="box-warn" x="620" y="186" width="124" height="96" rx="7"/>
+        <text class="step-n" x="632" y="206">4</text>
+        <text class="tb" x="682" y="228" text-anchor="middle">Cardinality</text>
+        <text class="tb" x="682" y="246" text-anchor="middle">limits</text>
+        <text class="ts" x="682" y="268" text-anchor="middle">cap → overflow</text>
+
+        <path class="edge" d="M330,234 L340,234" marker-end="url(#a1)"/>
+        <path class="edge" d="M468,234 L478,234" marker-end="url(#a1)"/>
+        <path class="edge" d="M606,234 L616,234" marker-end="url(#a1)"/>
+
+        <path class="edge" d="M760,221 L806,221" marker-end="url(#a1)"/>
+        <rect class="box" x="810" y="186" width="130" height="70" rx="8"/>
+        <text class="tb" x="875" y="216" text-anchor="middle">Mimir</text>
+        <text class="ts" x="875" y="236" text-anchor="middle">fewer active series</text>
+
+        <text class="ts" x="20" y="290">Logs and traces only get step 1.</text>
+      </svg>
+    </figure>
+    <ul class="notes">
+      <li>Every section is optional; an empty policy passes data through.</li>
+      <li>Rules match by glob (<code>k8s_pod_*</code>) or <code>regex:</code> pattern. Since #19 each pattern is tried against both the OTLP name and the escaped name Mimir stores.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Aggregation: one series per service, not per pod</h2>
+    <figure>
+      <svg viewBox="0 0 960 330" role="img" aria-label="Three pod counters become per-source deltas that add into one running total stamped with the collector id">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="label" x="20" y="22">INPUT · CUMULATIVE COUNTER</text>
+        <text class="label" x="340" y="22">PER-SOURCE STATE</text>
+        <text class="label" x="690" y="22">OUTPUT</text>
+
+        <rect class="box" x="20" y="38" width="270" height="66" rx="7"/>
+        <text class="tm" x="34" y="62">http_requests_total</text>
+        <text class="tm-muted" x="34" y="80">{k8s.pod.name="checkout-a"}</text>
+        <text class="t" x="34" y="97">120 → 130</text>
+
+        <rect class="box" x="20" y="126" width="270" height="66" rx="7"/>
+        <text class="tm" x="34" y="150">http_requests_total</text>
+        <text class="tm-muted" x="34" y="168">{k8s.pod.name="checkout-b"}</text>
+        <text class="t" x="34" y="185">60 → 65</text>
+
+        <rect class="box-warn" x="20" y="214" width="270" height="66" rx="7"/>
+        <text class="tm" x="34" y="238">http_requests_total</text>
+        <text class="tm-muted" x="34" y="256">{k8s.pod.name="checkout-c"}</text>
+        <text class="t" x="34" y="273">80 → 3   <tspan class="tw">pod restarted</tspan></text>
+
+        <path class="edge" d="M290,71 L336,71" marker-end="url(#a2)"/>
+        <path class="edge" d="M290,159 L336,159" marker-end="url(#a2)"/>
+        <path class="edge" d="M290,247 L336,247" marker-end="url(#a2)"/>
+
+        <rect class="box" x="340" y="38" width="290" height="242" rx="8"/>
+        <text class="tm" x="356" y="71">a: last 120 → <tspan class="ta">Δ +10</tspan></text>
+        <text class="tm" x="356" y="159">b: last 60  → <tspan class="ta">Δ +5</tspan></text>
+        <text class="tm" x="356" y="240">c: 3 &lt; 80 = reset</text>
+        <text class="tm" x="356" y="258">   → <tspan class="ta">Δ +3</tspan> (new value)</text>
+
+        <path class="edge-accent" d="M630,159 L686,159" marker-end="url(#a2a)"/>
+        <text class="ta" x="636" y="148">sum Δ</text>
+
+        <rect class="box-accent" x="690" y="96" width="250" height="130" rx="8"/>
+        <text class="tm" x="704" y="122">http_requests_total</text>
+        <text class="tm-muted" x="704" y="140">{service.name="checkout",</text>
+        <text class="tm-muted" x="704" y="158"> xscaler.collector.id="node-1"}</text>
+        <text class="t" x="704" y="186">500 + 18 = <tspan class="tb">518</tspan></text>
+        <text class="ts" x="704" y="208">stable start time, never drops</text>
+
+        <text class="ts" x="20" y="308">State is sharded (64 locks), forgotten after ttl (10m), capped at max_sources (100k). New outputs hold back for warmup (2m) after a collector restart.</text>
+      </svg>
+    </figure>
+    <ul class="notes">
+      <li>A naive sum would fall from 260 to 198 when pod c restarts, and <code>rate()</code> would read it as a reset. Deltas keep the total climbing.</li>
+      <li><code>xscaler.collector.id</code> stops two node agents from sending the same series, which Mimir would reject. Sum across collectors in the query.</li>
+      <li>Gauges combine each live pod's latest value with <code>gauge_function</code> (avg by default). Summaries are left as they are.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Cardinality limit: excess folds into an overflow series</h2>
+    <figure>
+      <svg viewBox="0 0 960 290" role="img" aria-label="With max_series 3, the first three series keep their own slot and the rest merge into one overflow series">
+        <defs>
+          <marker id="a3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a3w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-warn" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="label" x="20" y="22">INCOMING · db_query_duration · max_series: 3</text>
+
+        <rect class="box" x="20" y="36" width="250" height="36" rx="6"/><text class="tm" x="34" y="59">{query="q1"}</text>
+        <rect class="box" x="20" y="80" width="250" height="36" rx="6"/><text class="tm" x="34" y="103">{query="q2"}</text>
+        <rect class="box" x="20" y="124" width="250" height="36" rx="6"/><text class="tm" x="34" y="147">{query="q3"}</text>
+        <rect class="box" x="20" y="176" width="250" height="36" rx="6"/><text class="tm" x="34" y="199">{query="q4"}</text>
+        <rect class="box" x="20" y="220" width="250" height="36" rx="6"/><text class="tm" x="34" y="243">{query="q5"}</text>
+
+        <path class="edge-accent" d="M270,54 L466,90" marker-end="url(#a3a)"/>
+        <path class="edge-accent" d="M270,98 L466,98" marker-end="url(#a3a)"/>
+        <path class="edge-accent" d="M270,142 L466,106" marker-end="url(#a3a)"/>
+        <path class="edge-warn" d="M270,194 L466,214" marker-end="url(#a3w)"/>
+        <path class="edge-warn" d="M270,238 L466,222" marker-end="url(#a3w)"/>
+
+        <rect class="box-accent" x="470" y="50" width="470" height="96" rx="8"/>
+        <text class="tb" x="488" y="80">3 admitted series keep their labels</text>
+        <text class="ts" x="488" y="102">A slot is sticky while the series reports. Idle series give it</text>
+        <text class="ts" x="488" y="120">back at the end of a window (default 1h).</text>
+
+        <rect class="box-warn" x="470" y="174" width="470" height="96" rx="8"/>
+        <text class="tb" x="488" y="202">1 overflow series per metric</text>
+        <text class="tw" x="488" y="224">{otel_metric_overflow="true", xscaler.collector.id=…}</text>
+        <text class="ts" x="488" y="248">Labels are dropped but totals are kept, using the same per-source deltas.</text>
+      </svg>
+    </figure>
+    <ul class="notes">
+      <li>A series in the overflow stays there until it has been absent for a whole window, so it never jumps between the two.</li>
+      <li>Summaries past the limit are dropped and counted as overflow.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Name matching after #19</h2>
+    <figure>
+      <svg viewBox="0 0 960 190" role="img" aria-label="A rule written with the Mimir name now matches the dotted OTLP name via its escaped form">
+        <defs>
+          <marker id="a4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a4d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-drop" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="box-drop" x="20" y="64" width="230" height="60" rx="8"/>
+        <text class="ts" x="36" y="88">drop rule</text>
+        <text class="tm" x="36" y="108">k8s_pod_filesystem_*</text>
+
+        <rect class="box" x="340" y="20" width="290" height="56" rx="8"/>
+        <text class="ts" x="356" y="42">OTLP name</text>
+        <text class="tm" x="356" y="62">k8s.pod.filesystem.usage</text>
+
+        <rect class="box-accent" x="340" y="112" width="290" height="56" rx="8"/>
+        <text class="ts" x="356" y="134">escaped name (what Mimir stores)</text>
+        <text class="tm" x="356" y="154">k8s_pod_filesystem_usage</text>
+
+        <path class="edge-drop" d="M250,84 L336,52" marker-end="url(#a4d)"/>
+        <text class="td" x="262" y="56">✗</text>
+        <path class="edge-accent" d="M250,104 L336,136" marker-end="url(#a4a)"/>
+        <text class="ta" x="262" y="136">✓</text>
+
+        <path class="edge-accent" d="M630,140 L716,140" marker-end="url(#a4a)"/>
+        <rect class="box-accent" x="720" y="112" width="220" height="56" rx="8"/>
+        <text class="tb" x="736" y="137">metric dropped</text>
+        <text class="ts" x="736" y="156">before #19 it kept flowing</text>
+      </svg>
+    </figure>
+    <ul class="notes">
+      <li>Escaping works like otlptranslator with suffixes off: each run of characters outside <code>[a-zA-Z0-9_:]</code> becomes one <code>_</code>, and a leading digit gets an <code>_</code> prefix.</li>
+      <li>This applies to drops, aggregations and cardinality limits.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

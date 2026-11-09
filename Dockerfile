@@ -19,7 +19,7 @@ ARG ALPINE_VERSION=3.22
 # OBI's eBPF objects are not in its published Go module. Run OBI's own
 # `make generate` on the release tag; bpf2go emits objects for amd64 and arm64.
 FROM --platform=$BUILDPLATFORM ghcr.io/open-telemetry/obi-generator:${OBI_GENERATOR_VERSION} AS obi-gen
-ARG OBI_VERSION=0.15.2
+ARG OBI_VERSION=1.0.0
 RUN git clone --depth 1 --branch "v${OBI_VERSION}" \
       https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation /src/obi
 # llvm-strip lives only in the llvm bin dir; append it so bpf2go finds it.
@@ -99,7 +99,7 @@ COPY --from=sources-export /out/ /
 FROM alpine:${ALPINE_VERSION} AS image
 ARG VERSION=0.0.0-dev
 ARG OTEL_VERSION=0.163.0
-ARG OBI_VERSION=0.15.2
+ARG OBI_VERSION=1.0.0
 LABEL org.opencontainers.image.title="xscaler-collector" \
       org.opencontainers.image.source="https://github.com/xscaler/xscaler-agent" \
       org.opencontainers.image.licenses="Apache-2.0" \

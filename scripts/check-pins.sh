@@ -11,7 +11,8 @@ fail() { echo "pin drift: $*"; status=1; }
 
 # Every gomod line: contrib and core beta modules at v$OTEL_VERSION, core
 # stable modules (confmap providers) at v$OTEL_STABLE_VERSION, contrib
-# stable-base modules at v$CONTRIB_STABLE_VERSION, OBI at v$OBI_VERSION.
+# stable-base modules at v$CONTRIB_STABLE_VERSION, the OBI receiver at
+# v$OBI_COLLECTOR_VERSION.
 contrib=github.com/open-telemetry/opentelemetry-collector-contrib
 while read -r mod ver; do
   stable=""
@@ -24,7 +25,7 @@ while read -r mod ver; do
     github.com/open-telemetry/opentelemetry-collector-contrib/*) want="v$OTEL_VERSION" ;;
     go.opentelemetry.io/collector/confmap/*) want="v$OTEL_STABLE_VERSION" ;;
     go.opentelemetry.io/collector/*) want="v$OTEL_VERSION" ;;
-    go.opentelemetry.io/obi/*) want="v$OBI_VERSION" ;;
+    go.opentelemetry.io/obi/collector) want="v$OBI_COLLECTOR_VERSION" ;;
     # In-repo components, built from processor/ through `path:`.
     github.com/xscaler/xscaler-agent/processor/*) continue ;;
     *) fail "unexpected module $mod (upstream or in-repo modules only)"; continue ;;
@@ -48,5 +49,5 @@ for arg in GO_VERSION OBI_GENERATOR_VERSION OTEL_VERSION OBI_VERSION; do
   done < <(grep -E "^ARG $arg=" "$root/Dockerfile" | cut -d= -f2)
 done
 
-[ "$status" -eq 0 ] && echo "pins OK: otel $OTEL_VERSION / $OTEL_STABLE_VERSION, contrib stable $CONTRIB_STABLE_VERSION, obi $OBI_VERSION"
+[ "$status" -eq 0 ] && echo "pins OK: otel $OTEL_VERSION / $OTEL_STABLE_VERSION, contrib stable $CONTRIB_STABLE_VERSION, obi $OBI_VERSION / receiver $OBI_COLLECTOR_VERSION"
 exit "$status"
