@@ -522,7 +522,7 @@ needs no `helm repo add` and no network to prometheus-community, whether or not
 you enable it:
 
 ```sh
-helm install xscaler oci://ghcr.io/xscaler/charts/xscaler-agent --version 0.7.0 \
+helm install xscaler oci://ghcr.io/xscaler/charts/xscaler-agent --version 0.8.0 \
   --set enrollmentToken=xse_... \
   --set kube-state-metrics.enabled=true
 ```
